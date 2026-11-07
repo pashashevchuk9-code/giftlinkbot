@@ -138,10 +138,7 @@ class DealService:
         return f'<a href="{url}">{url}</a>'
 
     def _footer(self, label: str = "Предложение") -> str:
-        return (
-            f"<i>{label} бота @{_esc(self.bot_username)}. "
-            "Не системное уведомление Telegram.</i>"
-        )
+        return f"<i>{label} бота @{_esc(self.bot_username)}.</i>"
 
     def _short_title(self, title: str, limit: int = 70) -> str:
         return title if len(title) <= limit else title[: limit - 1] + "…"
