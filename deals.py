@@ -872,6 +872,10 @@ class DealService:
                 "Предложение уже изменилось. Обновите карточку в группе.",
             )
             return
+        try:
+            await callback.answer("Сделка была официально принята. Скиньте NFT официальному гаранту @GiftIinkGaurantBot", show_alert=True)
+        except TelegramAPIError:
+            pass
 
         await self.db.add_event(
             offer["id"],
