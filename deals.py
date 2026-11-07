@@ -388,6 +388,8 @@ class DealService:
 
     def _accepted_details_text(self, offer: dict[str, Any]) -> str:
         amount = int(offer["amount"])
+        buyer_username = offer.get("buyer_username")
+        buyer_label = f"@{buyer_username}" if buyer_username else f"id{offer['buyer_id']}"
         fee = int(offer.get("nft_transfer_star_count") or 0)
         transfer = (
             "автоматически через Telegram Business"
@@ -395,9 +397,11 @@ class DealService:
             else "вручную продавцом"
         )
         lines = [
+            "Офер официально оформлен в нашей базе данных.",
+            f"Передайте NFT {buyer_label}.",
+            "",
             f"<b>Сделка №{offer['id']}: подтверждение</b>",
             f"NFT: <b>{_esc(self._short_title(offer['nft_title']))}</b>",
-            f"Ссылка: {self._nft_link(offer)}",
             f"Покупатель: {self._buyer_label(offer)}",
             f"Продавцу к выплате: <b>{amount} Stars</b>",
             f"Передача NFT: {transfer}",

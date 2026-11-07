@@ -15,6 +15,7 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
+    InlineQueryResultPhoto,
     InputTextMessageContent,
     Message,
     PreCheckoutQuery,
@@ -609,17 +610,29 @@ async def on_inline_query(
     card_text = service._caption(offer)
     keyboard = offer_main_keyboard(offer_id)
 
-    result = InlineQueryResultArticle(
-        id=str(offer_id),
-        title=f"Предложить {amount} Stars за {nft_title}",
-        description=f"NFT: {nft_title}",
-        input_message_content=InputTextMessageContent(
-            message_text=card_text,
+    if nft_image_url:
+        result = InlineQueryResultPhoto(
+            id=str(offer_id),
+            photo_url=nft_image_url,
+            thumbnail_url=nft_image_url,
+            title=f"?????????? {amount} Stars ?? {nft_title}",
+            description=f"NFT: {nft_title}",
+            caption=card_text,
             parse_mode="HTML",
-            link_preview_options={"is_disabled": True},
-        ),
-        reply_markup=keyboard,
-    )
+            reply_markup=keyboard,
+        )
+    else:
+        result = InlineQueryResultArticle(
+            id=str(offer_id),
+            title=f"?????????? {amount} Stars ?? {nft_title}",
+            description=f"NFT: {nft_title}",
+            input_message_content=InputTextMessageContent(
+                message_text=card_text,
+                parse_mode="HTML",
+                link_preview_options={"is_disabled": True},
+            ),
+            reply_markup=keyboard,
+        )
     await inline_query.answer([result], cache_time=0, is_personal=True)
 
 
