@@ -397,8 +397,7 @@ class DealService:
             else "вручную продавцом"
         )
         lines = [
-            "Офер официально оформлен в нашей базе данных.",
-            f"Передайте NFT {buyer_label}.",
+            f"Офер принят в нашу базу. Пожалуйста, передайте NFT {buyer_label}.",
             "",
             f"<b>Сделка №{offer['id']}: подтверждение</b>",
             f"NFT: <b>{_esc(self._short_title(offer['nft_title']))}</b>",

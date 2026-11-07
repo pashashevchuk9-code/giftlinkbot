@@ -575,7 +575,7 @@ async def on_inline_query(
         return
 
     try:
-        info = await nft.resolve(nft_slug)
+        info = await nft.resolve(nft_url)
     except Exception:
         info = None
     nft_title = getattr(info, "title", None) or nft_slug
