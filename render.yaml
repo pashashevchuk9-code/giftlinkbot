@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: giftlinkbot
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        value: "5809580581"
+      - key: DATABASE_PATH
+        value: data/nft_offers.sqlite3
+      - key: TIMEZONE
+        value: Europe/Moscow
+      - key: PAYMENTS_ENABLED
+        value: "false"
+      - key: OPERATOR_PAYOUT_ACK
+        value: "false"
+      - key: ADMIN_IDS
+        value: ""
+      - key: MIN_OFFER_STARS
+        value: "1"
+      - key: MAX_OFFER_STARS
+        value: "1000000"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHON_VERSION
+        value: "3.12.8"
