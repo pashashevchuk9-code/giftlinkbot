@@ -505,40 +505,62 @@ async def on_inline_query(
 
     text = (inline_query.query or "").strip()
     parts = text.split()
-    if len(parts) < 2:
+    if not parts:
         await inline_query.answer(
             [],
             cache_time=1,
             is_personal=True,
-            switch_pm_text="???????: ??????_??_NFT ????",
+            switch_pm_text="Введите: ссылка_на_NFT цена",
             switch_pm_parameter="inline",
         )
         return
 
-    nft_url = parts[0]
-    amount_raw = parts[1]
-    nft_slug = parse_nft_link(nft_url)
-    if nft_slug is None:
+    import re as _re
+
+    nft_url = None
+    nft_slug = None
+    amount_raw = None
+
+    if parts[0].startswith("http") or "t.me/nft/" in parts[0].lower():
+        nft_url = parts[0]
+        nft_slug = parse_nft_link(nft_url)
+        amount_raw = parts[1] if len(parts) > 1 else None
+    elif len(parts) >= 3 and parts[-1].isdigit():
+        amount_raw = parts[-1]
+        name_part = " ".join(parts[:-1])
+        num_match = _re.search(r"#?(\d+)", name_part)
+        if num_match:
+            number = num_match.group(1)
+            name = name_part.replace(num_match.group(0), "").strip().replace(" ", "")
+            if name:
+                nft_slug = f"{name}-{number}"
+                nft_url = f"https://t.me/nft/{nft_slug}"
+    elif len(parts) >= 2 and parts[-1].isdigit():
+        amount_raw = parts[-1]
+        nft_url = parts[0]
+        nft_slug = parse_nft_link(nft_url)
+
+    if nft_slug is None or amount_raw is None:
         await inline_query.answer(
             [],
             cache_time=1,
             is_personal=True,
-            switch_pm_text="???????????? ?????? ?? NFT",
+            switch_pm_text="Формат: ссылка_на_NFT цена",
             switch_pm_parameter="inline",
         )
         return
+
     if not amount_raw.isdigit() or int(amount_raw) <= 0:
         await inline_query.answer(
             [],
             cache_time=1,
             is_personal=True,
-            switch_pm_text="???? ?????? ???? ?????? ?????? ????",
+            switch_pm_text="Цена должна быть числом больше нуля",
             switch_pm_parameter="inline",
         )
         return
     amount = int(amount_raw)
 
-    # ???????? ??????? ?? ????????.
     min_stars = await service.effective_min_stars()
     max_stars = await service.effective_max_stars()
     if amount < min_stars or amount > max_stars:
@@ -546,12 +568,11 @@ async def on_inline_query(
             [],
             cache_time=1,
             is_personal=True,
-            switch_pm_text=f"?????: ?? {min_stars} ?? {max_stars} Stars",
+            switch_pm_text=f"Сумма: от {min_stars} до {max_stars} Stars",
             switch_pm_parameter="inline",
         )
         return
 
-    # ?????????? NFT.
     try:
         info = await nft.resolve(nft_slug)
     except Exception:
@@ -590,7 +611,7 @@ async def on_inline_query(
 
     result = InlineQueryResultArticle(
         id=str(offer_id),
-        title=f"?????????? {amount} Stars ?? {nft_title}",
+        title=f"Предложить {amount} Stars за {nft_title}",
         description=f"NFT: {nft_title}",
         input_message_content=InputTextMessageContent(
             message_text=card_text,
