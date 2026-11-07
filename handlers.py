@@ -11,7 +11,11 @@ from aiogram.types import (
     BusinessConnection,
     CallbackQuery,
     ChatMemberUpdated,
+    ChosenInlineResult,
     ErrorEvent,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
     Message,
     PreCheckoutQuery,
 )
@@ -26,11 +30,12 @@ from access import (
 from admin_handlers import router as admin_router
 from config import Settings
 from database import Database
-from deals import DealService
-from keyboards import main_menu_keyboard
+from deals import DealService, _now
+from keyboards import main_menu_keyboard, offer_main_keyboard
+from nft import parse_nft_link
 from menu_handlers import WELCOME_TEXT
 from menu_handlers import router as menu_router
-from roles import Permission, Role
+from roles import Permission, Role, has_permission
 
 logger = logging.getLogger(__name__)
 router = Router(name="deals")
@@ -474,6 +479,140 @@ async def on_error(event: ErrorEvent, bot: Bot, db: Database, settings: Settings
         except TelegramAPIError:
             pass
     return True
+
+
+# ------------------------------------------------------------------ INLINE MODE
+
+
+@router.inline_query()
+async def on_inline_query(
+    inline_query: InlineQuery,
+    db: Database,
+    settings: Settings,
+    service: DealService,
+    nft: NFTResolver,
+) -> None:
+    if inline_query.from_user is None:
+        return
+    actor = await get_actor(db, settings, inline_query.from_user)
+    role = role_of(actor)
+    if role is Role.SKAM:
+        await inline_query.answer([], cache_time=1, is_personal=True)
+        return
+    if not has_permission(role, Permission.CREATE_OFFER):
+        await inline_query.answer([], cache_time=1, is_personal=True)
+        return
+
+    text = (inline_query.query or "").strip()
+    parts = text.split()
+    if len(parts) < 2:
+        await inline_query.answer(
+            [],
+            cache_time=1,
+            is_personal=True,
+            switch_pm_text="???????: ??????_??_NFT ????",
+            switch_pm_parameter="inline",
+        )
+        return
+
+    nft_url = parts[0]
+    amount_raw = parts[1]
+    nft_slug = parse_nft_link(nft_url)
+    if nft_slug is None:
+        await inline_query.answer(
+            [],
+            cache_time=1,
+            is_personal=True,
+            switch_pm_text="???????????? ?????? ?? NFT",
+            switch_pm_parameter="inline",
+        )
+        return
+    if not amount_raw.isdigit() or int(amount_raw) <= 0:
+        await inline_query.answer(
+            [],
+            cache_time=1,
+            is_personal=True,
+            switch_pm_text="???? ?????? ???? ?????? ?????? ????",
+            switch_pm_parameter="inline",
+        )
+        return
+    amount = int(amount_raw)
+
+    # ???????? ??????? ?? ????????.
+    min_stars = await service.effective_min_stars()
+    max_stars = await service.effective_max_stars()
+    if amount < min_stars or amount > max_stars:
+        await inline_query.answer(
+            [],
+            cache_time=1,
+            is_personal=True,
+            switch_pm_text=f"?????: ?? {min_stars} ?? {max_stars} Stars",
+            switch_pm_parameter="inline",
+        )
+        return
+
+    # ?????????? NFT.
+    try:
+        info = await nft.resolve(nft_slug)
+    except Exception:
+        info = None
+    nft_title = getattr(info, "title", None) or nft_slug
+    nft_image_url = getattr(info, "image_url", None)
+    nft_description = getattr(info, "description", None)
+    nft_owner_label = getattr(info, "owner_label", None)
+
+    now_ts = _now()
+    expires_at = now_ts + settings.offer_ttl_seconds
+    offer_id = await db.create_offer(
+        group_chat_id=0,
+        buyer_id=inline_query.from_user.id,
+        buyer_username=inline_query.from_user.username,
+        buyer_name=" ".join(
+            p for p in (inline_query.from_user.first_name, inline_query.from_user.last_name) if p
+        ),
+        seller_id=None,
+        seller_username=None,
+        seller_name=None,
+        nft_url=nft_url,
+        nft_slug=nft_slug,
+        nft_title=nft_title,
+        nft_image_url=nft_image_url,
+        nft_description=nft_description,
+        nft_owner_label=nft_owner_label,
+        amount=amount,
+        expires_at=expires_at,
+    )
+
+    offer = await db.get_offer(offer_id)
+    assert offer is not None
+    card_text = service._caption(offer)
+    keyboard = offer_main_keyboard(offer_id)
+
+    result = InlineQueryResultArticle(
+        id=str(offer_id),
+        title=f"?????????? {amount} Stars ?? {nft_title}",
+        description=f"NFT: {nft_title}",
+        input_message_content=InputTextMessageContent(
+            message_text=card_text,
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        ),
+        reply_markup=keyboard,
+    )
+    await inline_query.answer([result], cache_time=0, is_personal=True)
+
+
+@router.chosen_inline_result()
+async def on_chosen_inline_result(
+    chosen: ChosenInlineResult,
+    db: Database,
+) -> None:
+    try:
+        offer_id = int(chosen.result_id)
+    except (TypeError, ValueError):
+        return
+    if chosen.inline_message_id:
+        await db.set_inline_message(offer_id, chosen.inline_message_id)
 
 
 router.include_router(menu_router)

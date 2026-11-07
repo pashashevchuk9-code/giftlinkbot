@@ -41,7 +41,7 @@ git push -u origin main
 
 ## Шаг 3. Проверка
 
-- `https://ИМЯ-СЕРВИСА.onrender.com/health` → `{"status": "ok", ...}`
+- `https://giftlinkbot.onrender.com/health` → `{"status": "ok", ...}`
 - В логах Render: `HTTP health-сервер слушает порт ...`,
   `Подключение к Telegram проверено`, `Бот запущен`.
 - В Telegram: `/start`, `/whoami`, `/comand`, `/admins`.

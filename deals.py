@@ -466,12 +466,23 @@ class DealService:
 
     async def _refresh_card(self, offer_id: int) -> dict[str, Any] | None:
         offer = await self.db.get_offer(offer_id)
-        if offer is None or not offer.get("group_message_id"):
+        if offer is None:
+            return offer
+        if not offer.get("group_message_id") and not offer.get("inline_message_id"):
             return offer
         caption = self._caption(offer)
         keyboard = self._keyboard(offer)
         try:
-            if offer.get("card_kind") == "photo":
+            inline_id = offer.get("inline_message_id")
+            if inline_id:
+                await self.bot.edit_message_text(
+                    inline_message_id=inline_id,
+                    text=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                    link_preview_options={"is_disabled": True},
+                )
+            elif offer.get("card_kind") == "photo":
                 await self.bot.edit_message_caption(
                     chat_id=offer["group_chat_id"],
                     message_id=offer["group_message_id"],
@@ -491,9 +502,9 @@ class DealService:
         except TelegramBadRequest as exc:
             text = (exc.message or "").lower()
             if "message is not modified" not in text:
-                logger.warning("Не удалось обновить карточку #%s: %s", offer_id, exc.message)
+                logger.warning("?? ??????? ???????? ???????? #%s: %s", offer_id, exc.message)
         except TelegramAPIError as exc:
-            logger.warning("Не удалось обновить карточку #%s: %s", offer_id, exc.message)
+            logger.warning("?? ??????? ???????? ???????? #%s: %s", offer_id, exc.message)
         self._last_card_caption[offer_id] = caption
         return offer
 
@@ -527,16 +538,19 @@ class DealService:
         *,
         keyboard=None,
     ) -> None:
+        chat_id = offer.get("group_chat_id")
+        if not chat_id:
+            return
         try:
             await self.bot.send_message(
-                chat_id=offer["group_chat_id"],
+                chat_id=chat_id,
                 text=text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard,
                 link_preview_options={"is_disabled": True},
             )
         except TelegramAPIError as exc:
-            logger.warning("Не удалось отправить сообщение в группу: %s", exc.message)
+            logger.warning("?? ??????? ????????? ????????? ? ??????: %s", exc.message)
 
     async def _user_or_group(
         self,
@@ -780,11 +794,16 @@ class DealService:
         if offer is None:
             await self._callback_alert(callback, "Сделка не найдена.")
             return
-        if callback.message is None or callback.message.chat.id != offer["group_chat_id"]:
-            await self._callback_alert(callback, "Кнопка не относится к этому чату.")
-            return
+        inline = bool(callback.inline_message_id)
+        if not inline:
+            if callback.message is None or callback.message.chat.id != offer["group_chat_id"]:
+                await self._callback_alert(callback, "?????? ?? ????????? ? ????? ????.")
+                return
 
         user = callback.from_user
+        if user.id == offer.get("buyer_id"):
+            await self._callback_alert(callback, "?????? ??????? ??????????? ???????????.")
+            return
         if not self._is_seller(offer, user):
             await self._callback_alert(callback, "Это предложение не для вас.")
             return
@@ -1949,6 +1968,10 @@ class DealService:
             return offer["seller_id"] == user.id
         if offer.get("seller_username") and user.username:
             return offer["seller_username"].lower() == user.username.lower()
+        # ???????? ??????????? (inline-?????): ????????? ????? ????? ?????,
+        # ????? ??????????.
+        if offer.get("seller_id") is None and not offer.get("seller_username"):
+            return user.id != offer.get("buyer_id")
         return False
 
     async def _bind_seller_if_needed(self, offer: dict[str, Any], user: User) -> None:

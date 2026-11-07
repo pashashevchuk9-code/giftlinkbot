@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS offers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_chat_id INTEGER NOT NULL,
+    group_chat_id INTEGER,
     group_message_id INTEGER,
+    inline_message_id TEXT,
     card_kind TEXT NOT NULL DEFAULT 'text',
     buyer_id INTEGER NOT NULL,
     buyer_username TEXT,
@@ -300,6 +301,15 @@ class Database:
         await self.conn.execute(
             "UPDATE users SET is_banned=0 WHERE is_banned IS NULL"
         )
+        await self._migrate_offers()
+
+    async def _migrate_offers(self) -> None:
+        cursor = await self.conn.execute("PRAGMA table_info(offers)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "inline_message_id" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE offers ADD COLUMN inline_message_id TEXT"
+            )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -882,9 +892,15 @@ class Database:
         )
         return int(cursor.lastrowid)
 
-    async def set_group_message(
-        self, offer_id: int, message_id: int, card_kind: str
-    ) -> None:
+    async def set_inline_message(self, offer_id: int, inline_message_id: str) -> None:
+        await self.conn.execute(
+            """
+            UPDATE offers
+            SET inline_message_id=?, updated_at=?
+            WHERE id=?
+            """,
+            (inline_message_id, _now(), offer_id),
+        )
         await self.conn.execute(
             """
             UPDATE offers
