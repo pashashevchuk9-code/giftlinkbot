@@ -27,7 +27,7 @@ services:
         value: "1"
       - key: MAX_OFFER_STARS
         value: "1000000"
-      - key: LOG_LEVEL
-        value: INFO
+      - key: SUPPORT_CONTACT
+        value: "@HelpingGiftIinkBot"
       - key: PYTHON_VERSION
         value: "3.12.8"
