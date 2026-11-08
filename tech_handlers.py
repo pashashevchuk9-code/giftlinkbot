@@ -423,7 +423,7 @@ async def cmd_clearlogs(message: Message, db: Database, settings: Settings) -> N
 
 # ------------------------------------------------------------------ очереди
 
-@router.message(Command("queue", "jobs", "jobstats", "scheduler"))
+@router.message(Command("queue", "jobs", "jobstats", "scheduler", "retryqueue"))
 async def cmd_queue(message: Message, db: Database, settings: Settings) -> None:
     actor = await _guard(message, db, settings)
     if actor is None:

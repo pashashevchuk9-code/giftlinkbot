@@ -165,7 +165,7 @@ async def cmd_whoami(
     )
 
 
-@router.message(Command("myoffers", "deals"))
+@router.message(Command("myoffers", "deals", "offers"))
 async def cmd_myoffers(
     message: Message, db: Database, service: DealService, settings: Settings
 ) -> None:
