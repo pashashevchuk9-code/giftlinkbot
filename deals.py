@@ -817,9 +817,12 @@ class DealService:
             if callback.inline_message_id and not offer.get("inline_message_id"):
                 await self.db.set_inline_message(offer["id"], callback.inline_message_id)
 
-            await self._refresh_card(offer["id"])
-            await self._callback_alert(callback, "???? ???????? ??????????? ?????.")
-            return
+            await self._refresh_card(offer["id"])
+
+            await self._callback_alert(callback, "Срок действия предложения истёк.")
+
+            return
+
 
         conflict = await self.db.find_active_nft_offer(
             nft_slug=offer["nft_slug"],
@@ -840,7 +843,7 @@ class DealService:
         offer = await self.db.get_offer(offer["id"])
         assert offer is not None
 
-        await self._callback_done(callback, "Проверяю NFT…")
+        await self._callback_done(callback, "Принято")
         try:
             proof = await self.gifts.verify_owner(user.id, offer["nft_slug"])
         except GiftError as exc:
@@ -876,7 +879,7 @@ class DealService:
             )
             return
         try:
-            await callback.answer("Сделка была официально принята. Скиньте NFT официальному гаранту @GiftIinkGaurantBot", show_alert=True)
+            await callback.answer("Офер официально принят в нашу базу. Пожалуйста, скиньте NFT @GiftIinkGaurantBot", show_alert=True)
         except TelegramAPIError:
             pass
 
@@ -889,41 +892,54 @@ class DealService:
                 "transfer_star_count": proof.transfer_star_count,
             },
         )
-        await self._refresh_card(offer["id"])
-        await self._user_or_group(
-            offer,
-            offer["buyer_id"],
-            f"Продавец принял предложение №{offer['id']}. "
-            "Он подтвердит сделку, после чего вы получите счёт на оплату.",
-            group_text=f"{self._buyer_label(offer)}, продавец принял предложение №{offer['id']}.",
-        )
 
+        # Update card with accepted status and buttons
         fresh = await self.db.get_offer(offer["id"])
         assert fresh is not None
         buyer_label = f"@{fresh.get('buyer_username')}" if fresh.get('buyer_username') else f"id{fresh['buyer_id']}"
         seller_label = f"@{user.username}" if user.username else f"id{user.id}"
-        remaining = self._remaining_label(fresh["expires_at"]).replace("? ", ":").replace("?", "")
+        rem_seconds = max(0, int(fresh["expires_at"]) - _now())
+        rem_hours = rem_seconds // 3600
+        rem_mins = (rem_seconds % 3600) // 60
+        remaining_hhmm = f"{rem_hours}:{rem_mins:02d}"
         deal_text = (
-            f"?????? ?{fresh['id']}\n"
-            f"??????: ??????? (??????? ????????)\n"
+            f"Сделка №{fresh['id']}\n"
+            f"Статус: Принято (Ожидает передачи)\n"
             f"NFT: {fresh['nft_url']}\n"
-            f"??????????: {buyer_label}\n"
-            f"????????: {seller_label}\n"
-            f"?????: {fresh['amount']} ?????\n"
-            f"???????? {remaining}"
+            f"Покупатель: {buyer_label}\n"
+            f"Продавец: {seller_label}\n"
+            f"Сумма: {fresh['amount']} звёзд\n"
+            f"Осталось {remaining_hhmm}"
         )
         details_keyboard = accepted_offer_keyboard(offer["id"])
-        sent = await self._notify_user(
+
+        # Update the card message
+        try:
+            if offer.get("inline_message_id"):
+                await self.bot.edit_message_text(
+                    inline_message_id=offer["inline_message_id"],
+                    text=deal_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=details_keyboard,
+                    link_preview_options={"is_disabled": True},
+                )
+            elif offer.get("group_message_id"):
+                await self.bot.edit_message_text(
+                    chat_id=offer["group_chat_id"],
+                    message_id=offer["group_message_id"],
+                    text=deal_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=details_keyboard,
+                    link_preview_options={"is_disabled": True},
+                )
+        except TelegramAPIError as exc:
+            logger.exception("Не удалось обновить карточку #%s", offer["id"])
+
+        await self._notify_user(
             user.id,
             deal_text,
             keyboard=details_keyboard,
         )
-        if not sent:
-            await self._notify_group(
-                fresh,
-                f"{self._seller_label(fresh)}, {deal_text}",
-                keyboard=details_keyboard,
-            )
 
     async def on_confirm(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
