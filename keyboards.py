@@ -81,7 +81,21 @@ def offer_list_keyboard(offers: list[int]) -> InlineKeyboardMarkup:
 
 
 
-def offer_main_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+def accepted_offer_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Отправить NFT",
+                    callback_data=f"offer:{offer_id}:send_nft",
+                ),
+                InlineKeyboardButton(
+                    text="Я передал",
+                    callback_data=f"offer:{offer_id}:transferred",
+                ),
+            ]
+        ]
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -186,3 +200,20 @@ def admin_refund_keyboard(offer_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+def offer_main_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Принять",
+                    callback_data="offer:" + str(offer_id) + ":accept",
+                ),
+                InlineKeyboardButton(
+                    text="Отклонить",
+                    callback_data="offer:" + str(offer_id) + ":reject",
+                ),
+            ]
+        ]
+    )
+

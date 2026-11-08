@@ -404,6 +404,8 @@ async def on_offer_callback(
         "seller_sent": service.on_seller_sent,
         "buyer_confirm": service.on_buyer_confirm,
         "dispute": service.on_dispute,
+        "send_nft": service.on_send_nft,
+        "transferred": service.on_transferred,
     }
     handler = handlers.get(action)
     if handler is None:

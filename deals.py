@@ -25,6 +25,7 @@ from constants import OfferStatus, status_label
 from database import Database
 from gifts import GiftError, GiftService
 from keyboards import (
+    accepted_offer_keyboard,
     buyer_confirm_keyboard,
     offer_details_keyboard,
     offer_main_keyboard,
@@ -907,17 +908,28 @@ class DealService:
 
         fresh = await self.db.get_offer(offer["id"])
         assert fresh is not None
-        details = self._accepted_details_text(fresh)
-        details_keyboard = offer_details_keyboard(offer["id"])
+        buyer_label = f"@{fresh.get('buyer_username')}" if fresh.get('buyer_username') else f"id{fresh['buyer_id']}"
+        seller_label = f"@{user.username}" if user.username else f"id{user.id}"
+        remaining = self._remaining_label(fresh["expires_at"]).replace("? ", ":").replace("?", "")
+        deal_text = (
+            f"?????? ?{fresh['id']}\n"
+            f"??????: ??????? (??????? ????????)\n"
+            f"NFT: {fresh['nft_url']}\n"
+            f"??????????: {buyer_label}\n"
+            f"????????: {seller_label}\n"
+            f"?????: {fresh['amount']} ?????\n"
+            f"???????? {remaining}"
+        )
+        details_keyboard = accepted_offer_keyboard(offer["id"])
         sent = await self._notify_user(
             user.id,
-            details,
+            deal_text,
             keyboard=details_keyboard,
         )
         if not sent:
             await self._notify_group(
                 fresh,
-                f"{self._seller_label(fresh)}, {details}",
+                f"{self._seller_label(fresh)}, {deal_text}",
                 keyboard=details_keyboard,
             )
 
@@ -1246,6 +1258,26 @@ class DealService:
             f"<code>/payout {offer['id']} ССЫЛКА_ИЛИ_НОМЕР</code>"
         )
         await self._callback_done(callback, "Получение подтверждено")
+
+    async def on_send_nft(self, callback: CallbackQuery) -> None:
+        if not await self._guard_callback(callback):
+            return
+        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+        if offer is None:
+            await self._callback_alert(callback, "?????? ?? ???????.")
+            return
+        await callback.answer(
+            "??????? NFT @GiftIinkGaurantBot", show_alert=True
+        )
+
+    async def on_transferred(self, callback: CallbackQuery) -> None:
+        if not await self._guard_callback(callback):
+            return
+        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+        if offer is None:
+            await self._callback_alert(callback, "?????? ?? ???????.")
+            return
+        await self._callback_done(callback, "????????")
 
     async def on_dispute(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
