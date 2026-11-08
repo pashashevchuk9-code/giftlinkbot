@@ -8,6 +8,7 @@ from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    FSInputFile,
     BusinessConnection,
     CallbackQuery,
     ChatMemberUpdated,
