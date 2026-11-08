@@ -1,0 +1,21 @@
+name: Keep Render awake (extra 1)
+
+on:
+  schedule:
+    - cron: '1,6,11,16,21,26,31,36,41,46,51,56 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health endpoint
+        run: |
+          for i in 1 2 3; do
+            if curl -fsS --max-time 60 https://giftlinkbot.onrender.com/health; then
+              echo "Extra1 ping OK"
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 0
