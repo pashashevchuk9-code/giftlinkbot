@@ -518,6 +518,12 @@ async def on_inline_query(
 
     import re as _re
 
+    # Определение языка (последнее слово, если это код языка)
+    language = "ru"
+    if len(parts) >= 2 and parts[-1].lower() in {"ua", "ru", "en", "ku"}:
+        language = parts[-1].lower()
+        parts = parts[:-1]
+
     nft_url = None
     nft_slug = None
     amount_raw = None
@@ -560,6 +566,7 @@ async def on_inline_query(
             switch_pm_parameter="inline",
         )
         return
+
     amount = int(amount_raw)
 
     min_stars = await service.effective_min_stars()
@@ -576,7 +583,8 @@ async def on_inline_query(
 
     try:
         info = await nft.resolve(nft_url)
-    except Exception:
+    except Exception as exc:
+        logger.warning("NFT resolve failed for %s: %s", nft_slug, exc)
         info = None
     nft_title = getattr(info, "title", None) or nft_slug
     nft_image_url = getattr(info, "image_url", None)
@@ -603,6 +611,7 @@ async def on_inline_query(
         nft_owner_label=nft_owner_label,
         amount=amount,
         expires_at=expires_at,
+        language=language,
     )
 
     offer = await db.get_offer(offer_id)
@@ -615,8 +624,8 @@ async def on_inline_query(
             id=str(offer_id),
             photo_url=nft_image_url,
             thumbnail_url=nft_image_url,
-            title=f"?????????? {amount} Stars ?? {nft_title}",
-            description=f"NFT: {nft_title}",
+            title=f"Предложить {amount} Stars за {nft_title}",
+            description=card_text.replace("\n", " ")[:200],
             caption=card_text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -624,8 +633,8 @@ async def on_inline_query(
     else:
         result = InlineQueryResultArticle(
             id=str(offer_id),
-            title=f"?????????? {amount} Stars ?? {nft_title}",
-            description=f"NFT: {nft_title}",
+            title=f"Предложить {amount} Stars за {nft_title}",
+            description=card_text.replace("\n", " ")[:200],
             input_message_content=InputTextMessageContent(
                 message_text=card_text,
                 parse_mode="HTML",
@@ -633,6 +642,7 @@ async def on_inline_query(
             ),
             reply_markup=keyboard,
         )
+    logger.info("Inline result created: offer_id=%s, has_photo=%s", offer_id, bool(nft_image_url))
     await inline_query.answer([result], cache_time=0, is_personal=True)
 
 

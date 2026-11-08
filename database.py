@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS offers (
     nft_image_url TEXT,
     nft_description TEXT,
     nft_owner_label TEXT,
+    language TEXT NOT NULL DEFAULT 'ru',
     amount INTEGER NOT NULL,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -309,6 +310,10 @@ class Database:
         if "inline_message_id" not in columns:
             await self.conn.execute(
                 "ALTER TABLE offers ADD COLUMN inline_message_id TEXT"
+            )
+        if "language" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE offers ADD COLUMN language TEXT NOT NULL DEFAULT 'ru'"
             )
 
     async def close(self) -> None:
@@ -856,6 +861,7 @@ class Database:
         nft_description: str | None,
         nft_owner_label: str | None,
         amount: int,
+        language: str = 'ru',
         expires_at: int,
     ) -> int:
         now = _now()
@@ -865,9 +871,9 @@ class Database:
                 group_chat_id, buyer_id, buyer_username, buyer_name,
                 seller_id, seller_username, seller_name,
                 nft_url, nft_slug, nft_title, nft_image_url, nft_description,
-                nft_owner_label, amount, status, created_at, expires_at, updated_at
+                nft_owner_label, language, amount, status, created_at, expires_at, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_chat_id,
@@ -883,6 +889,7 @@ class Database:
                 nft_image_url,
                 nft_description,
                 nft_owner_label,
+                language,
                 amount,
                 OfferStatus.PENDING.value,
                 now,

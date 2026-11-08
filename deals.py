@@ -188,6 +188,12 @@ class DealService:
 
     # ---------------------------------------------------------------- captions
 
+    _LANG_TEMPLATES = {
+        "ru": ("{buyer} предлагает Вам {stars} за подарок {nft}.\nПредложение действует ещё {remaining}.\n\n{footer}", "Предложение"),
+        "ua": ("{buyer} пропонує Вам {stars} за подарунок {nft}.\nПропозиція діє ще {remaining}.\n\n{footer}", "Пропозиція"),
+        "en": ("{buyer} offers you {stars} for gift {nft}.\nOffer valid for {remaining}.\n\n{footer}", "Offer"),
+        "ku": ("{buyer} 为您提供了 {stars} 的礼物 {nft}。\n此提案有效期还有 {remaining}。\n\n{footer}", "提案"),
+    }
     def _caption(self, offer: dict[str, Any]) -> str:
         status = offer["status"]
         title = _esc(self._short_title(offer["nft_title"]))
@@ -200,12 +206,16 @@ class DealService:
         lines = [f"<b>{title}</b>", link, ""]
 
         if status == OfferStatus.PENDING.value:
-            return (
-                f"{buyer} предлагает Вам {self._stars_label(amount)} "
-                f"за подарок {self._nft_label(offer)}.\n"
-                f"Предложение действует ещё "
-                f"{self._remaining_label(offer['expires_at'])}.\n\n"
-                f"{self._footer('Предложение')}"
+            lang = (offer.get("language") or "ru").lower()
+            if lang not in self._LANG_TEMPLATES:
+                lang = "ru"
+            tmpl, footer_label = self._LANG_TEMPLATES[lang]
+            return tmpl.format(
+                buyer=buyer,
+                stars=self._stars_label(amount),
+                nft=self._nft_label(offer),
+                remaining=self._remaining_label(offer["expires_at"]),
+                footer=self._footer(footer_label),
             )
 
         if status == OfferStatus.ACCEPTED.value:
