@@ -512,9 +512,9 @@ class DealService:
         except TelegramBadRequest as exc:
             text = (exc.message or "").lower()
             if "message is not modified" not in text:
-                logger.warning("?? ??????? ???????? ???????? #%s: %s", offer_id, exc.message)
+                logger.warning("Не удалось обновить карточку #%s: %s", offer_id, exc.message)
         except TelegramAPIError as exc:
-            logger.warning("?? ??????? ???????? ???????? #%s: %s", offer_id, exc.message)
+                logger.warning("Не удалось обновить карточку #%s: %s", offer_id, exc.message)
         self._last_card_caption[offer_id] = caption
         return offer
 
@@ -560,7 +560,7 @@ class DealService:
                 link_preview_options={"is_disabled": True},
             )
         except TelegramAPIError as exc:
-            logger.warning("?? ??????? ????????? ????????? ? ??????: %s", exc.message)
+            logger.warning("Не удалось отправить мессаг в группу: %s", exc.message)
 
     async def _user_or_group(
         self,
@@ -807,12 +807,12 @@ class DealService:
         inline = bool(callback.inline_message_id)
         if not inline:
             if callback.message is None or callback.message.chat.id != offer["group_chat_id"]:
-                await self._callback_alert(callback, "?????? ?? ????????? ? ????? ????.")
+                await self._callback_alert(callback, "Кнопка не относится к этому чату.")
                 return
 
         user = callback.from_user
         if user.id == offer.get("buyer_id"):
-            await self._callback_alert(callback, "?????? ??????? ??????????? ???????????.")
+            await self._callback_alert(callback, "Нельзя принять собственное предложение.")
             return
         if not self._is_seller(offer, user):
             await self._callback_alert(callback, "Это предложение не для вас.")
@@ -883,7 +883,7 @@ class DealService:
             )
             return
         try:
-            await callback.answer("ÐÑÐµÑ Ð¾ÑÐ¸ÑÐ¸Ð°Ð»ÑÐ½Ð¾ Ð¿ÑÐ¸Ð½ÑÑ Ð² Ð½Ð°ÑÑ Ð±Ð°Ð·Ñ Ð´Ð°Ð½Ð½ÑÑ. ÐÐ¾Ð¶Ð°Ð»ÑÐ¹ÑÑÐ°, ÑÐºÐ¸Ð½ÑÑÐµ NFT Ð´Ð»Ñ Ð¿ÑÐ¾Ð´Ð¾Ð»Ð¶ÐµÐ½Ð¸Ñ @GiftIinkGaurantBot", show_alert=True)
+            await callback.answer("Сделка была официально принята. Скиньте NFT официальному гаранту @GiftIinkGaurantBot", show_alert=True)
         except TelegramAPIError:
             pass
 
@@ -1982,8 +1982,8 @@ class DealService:
             return offer["seller_id"] == user.id
         if offer.get("seller_username") and user.username:
             return offer["seller_username"].lower() == user.username.lower()
-        # ???????? ??????????? (inline-?????): ????????? ????? ????? ?????,
-        # ????? ??????????.
+        # 
+        # 
         if offer.get("seller_id") is None and not offer.get("seller_username"):
             return user.id != offer.get("buyer_id")
         return False
