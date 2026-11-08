@@ -543,6 +543,13 @@ class Database:
         row = await cursor.fetchone()
         return int(row["cnt"]) if row else 0
 
+    async def get_users_by_role(self, role: "Role | str") -> list[dict[str, Any]]:
+        value = role.value if hasattr(role, "value") else str(role)
+        cursor = await self.conn.execute(
+            "SELECT * FROM users WHERE role=? ORDER BY user_id", (value,)
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
     async def role_counts(self) -> dict[str, int]:
         cursor = await self.conn.execute(
             "SELECT role, COUNT(*) AS cnt FROM users GROUP BY role"

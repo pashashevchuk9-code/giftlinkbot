@@ -31,6 +31,7 @@ from access import (
 )
 from admin_handlers import router as admin_router
 from tech_handlers import router as tech_router
+from extra_admin import router as extra_admin_router
 from worker_handlers import router as worker_router
 from config import Settings
 from database import Database
@@ -863,4 +864,5 @@ async def cmd_cancel_simple(message: Message, db: Database, settings: Settings) 
 router.include_router(menu_router)
 router.include_router(admin_router)
 router.include_router(tech_router)
+router.include_router(extra_admin_router)
 router.include_router(worker_router)
