@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     banned_by INTEGER,
     restriction_until INTEGER,
     restriction_reason TEXT,
+    language TEXT NOT NULL DEFAULT 'ru',
     updated_at INTEGER NOT NULL
 );
 
@@ -285,6 +286,7 @@ class Database:
             "banned_by": "INTEGER",
             "restriction_until": "INTEGER",
             "restriction_reason": "TEXT",
+            "language": "TEXT NOT NULL DEFAULT 'ru'",
         }
         for name, ddl in additions.items():
             if name not in columns:
@@ -391,6 +393,20 @@ class Database:
             (username.lstrip("@"),),
         )
         return _row_to_dict(await cursor.fetchone())
+
+    async def set_user_language(self, user_id: int, language: str) -> bool:
+        cursor = await self.conn.execute(
+            "UPDATE users SET language=?, updated_at=? WHERE user_id=?",
+            (language, _now(), user_id),
+        )
+        return cursor.rowcount == 1
+
+    async def get_user_language(self, user_id: int) -> str:
+        cursor = await self.conn.execute(
+            "SELECT language FROM users WHERE user_id=?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row["language"] if row and row["language"] else "ru"
 
     async def set_user_role(self, user_id: int, role: Role | str) -> bool:
         value = role.value if isinstance(role, Role) else str(role)

@@ -578,7 +578,7 @@ class DealService:
 
     async def _callback_alert(self, callback: CallbackQuery, text: str) -> None:
         try:
-            await callback.answer(text[:200], show_alert=True)
+            await callback.answer(text[:200])
         except TelegramAPIError:
             pass
 
@@ -883,7 +883,7 @@ class DealService:
             )
             return
         try:
-            await callback.answer("Сделка была официально принята. Скиньте NFT официальному гаранту @GiftIinkGaurantBot", show_alert=True)
+            await callback.answer("ÐÑÐµÑ Ð¾ÑÐ¸ÑÐ¸Ð°Ð»ÑÐ½Ð¾ Ð¿ÑÐ¸Ð½ÑÑ Ð² Ð½Ð°ÑÑ Ð±Ð°Ð·Ñ Ð´Ð°Ð½Ð½ÑÑ. ÐÐ¾Ð¶Ð°Ð»ÑÐ¹ÑÑÐ°, ÑÐºÐ¸Ð½ÑÑÐµ NFT Ð´Ð»Ñ Ð¿ÑÐ¾Ð´Ð¾Ð»Ð¶ÐµÐ½Ð¸Ñ @GiftIinkGaurantBot", show_alert=True)
         except TelegramAPIError:
             pass
 
