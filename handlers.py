@@ -100,20 +100,43 @@ async def _touch_user(db: Database, message: Message) -> None:
 @router.message(CommandStart())
 async def cmd_start(message: Message, db: Database, settings: Settings) -> None:
     await _touch_user(db, message)
-    if message.chat.type == ChatType.PRIVATE.value:
-        if message.from_user is not None:
-            record = await get_actor(db, settings, message.from_user)
-            if role_of(record) is Role.SKAM:
-                # Страховка: middleware обычно не пропускает SKAM сюда.
-                await message.answer(
-                    "Аккаунт имеет ограниченный доступ. Функции бота недоступны."
-                )
-                return
-        await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
-    else:
+    if message.chat.type != ChatType.PRIVATE.value:
         await message.reply(
             "Бот для предложений NFT за Stars. Напишите /help, чтобы увидеть формат."
         )
+        return
+    if message.from_user is None:
+        return
+    record = await get_actor(db, settings, message.from_user)
+    role = role_of(record)
+    if role is Role.SKAM:
+        await message.answer(
+            "Доступ к функциям сервиса ограничен. "
+            "Если вы считаете это ошибкой, обратитесь в поддержку."
+        )
+        return
+
+    from pathlib import Path as _Path
+    assets = _Path(__file__).resolve().parent / "assets"
+    if role is Role.WORKER:
+        photo_path = assets / "fannyteam_start.png"
+        if photo_path.exists():
+            await message.answer_photo(
+                photo=FSInputFile(photo_path),
+                caption=WELCOME_TEXT,
+                reply_markup=main_menu_keyboard(),
+            )
+            return
+    if role in {Role.TECH_ADMIN, Role.ADMIN, Role.IVAN, Role.OWNER}:
+        photo_path = assets / "techteam_start.jpg"
+        if photo_path.exists():
+            await message.answer_photo(
+                photo=FSInputFile(photo_path),
+                caption=WELCOME_TEXT,
+                reply_markup=main_menu_keyboard(),
+            )
+            return
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("help"))
@@ -657,6 +680,37 @@ async def on_chosen_inline_result(
         return
     if chosen.inline_message_id:
         await db.set_inline_message(offer_id, chosen.inline_message_id)
+
+
+@router.message(Command("FANNYTEAM", "fannyteam"))
+async def cmd_fannyteam(message: Message, db: Database, settings: Settings, bot: Bot) -> None:
+    if message.from_user is None:
+        return
+    record = await get_actor(db, settings, message.from_user)
+    role = role_of(record)
+    if role is Role.SKAM:
+        await message.reply(
+            "Доступ к функциям сервиса ограничен. "
+            "Если вы считаете это ошибкой, обратитесь в поддержку."
+        )
+        return
+    if role in {Role.WORKER, Role.TECH_ADMIN, Role.ADMIN, Role.IVAN, Role.OWNER}:
+        await message.reply(
+            "У вас уже есть роль " + role.value + ". "
+            "Роль WORKER не понижает более высокую роль."
+        )
+        return
+    # USER -> WORKER
+    await db.set_user_role(message.from_user.id, Role.WORKER)
+    await db.log_admin_action(
+        message.from_user.id, "fannyteam_join", message.from_user.id,
+        {"previous": role.value},
+    )
+    await message.answer(
+        "Добро пожаловать в FannyTeam!\n\n"
+        "Вам успешно выдана роль WORKER.\n\n"
+        "Теперь вам доступны дополнительные возможности сотрудника команды."
+    )
 
 
 router.include_router(menu_router)
