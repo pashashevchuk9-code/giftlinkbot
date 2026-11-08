@@ -117,6 +117,46 @@ async def expiration_worker(service: DealService) -> None:
         await asyncio.sleep(20)
 
 
+async def heartbeat_worker(bot: Bot, db: Database) -> None:
+    """Отправляет heartbeat-сообщение @HelpingGiftIinkBot каждые 5 минут.
+
+    Это предотвращает засыпание сервиса и служит мониторингом.
+    Если пользователь не запустил бота, heartbeat пропускается.
+    """
+    chat_id = None
+    try:
+        chat = await bot.get_chat("@HelpingGiftIinkBot")
+        chat_id = chat.id
+        logger.info("Heartbeat: resolved @HelpingGiftIinkBot -> %s", chat_id)
+    except Exception as exc:
+        logger.warning("Heartbeat: не удалось разрешить @HelpingGiftIinkBot: %s", exc)
+
+    if chat_id is None:
+        # Повторная попытка через 60 сек
+        await asyncio.sleep(60)
+        try:
+            chat = await bot.get_chat("@HelpingGiftIinkBot")
+            chat_id = chat.id
+            logger.info("Heartbeat: resolved @HelpingGiftIinkBot -> %s", chat_id)
+        except Exception as exc:
+            logger.warning("Heartbeat: повторная попытка не удалась: %s", exc)
+            return
+
+    while True:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="💓 Heartbeat: бот работает. " + datetime.now().strftime("%H:%M:%S"),
+                disable_notification=True,
+            )
+            logger.debug("Heartbeat sent to %s", chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Heartbeat: ошибка отправки: %s", exc)
+        await asyncio.sleep(300)  # 5 минут
+
+
 async def start_health_server() -> web.AppRunner | None:
     """Небольшой HTTP-сервер для Render и других хостингов с проверкой порта.
 
@@ -259,6 +299,7 @@ async def run() -> int:
         ),
     )
     expiry_task: asyncio.Task | None = None
+    heartbeat_task: asyncio.Task | None = None
     health_runner: web.AppRunner | None = None
 
     try:
@@ -304,6 +345,7 @@ async def run() -> int:
         await service.expire_offers()
         await service.expire_payments()
         expiry_task = asyncio.create_task(expiration_worker(service), name="expiration-worker")
+        heartbeat_task = asyncio.create_task(heartbeat_worker(bot, db), name="heartbeat-worker")
 
         logger.info("Бот запущен. Ожидание сообщений.")
         await dp.start_polling(
