@@ -11,14 +11,16 @@ jobs:
     steps:
       - name: Ping Render health endpoint
         run: |
-          for i in 1 2 3; do
-            if curl -fsS --max-time 30 https://giftlinkbot.onrender.com/health; then
-              echo ""
-              echo "Ping $i OK"
+          for i in 1 2 3 4; do
+            echo "Attempt $i..."
+            RESPONSE=$(curl -sS --max-time 60 -w "\n%{http_code}" https://giftlinkbot.onrender.com/health || true)
+            echo "$RESPONSE"
+            if echo "$RESPONSE" | grep -q '"status": "ok"'; then
+              echo "Ping $i OK - service is awake"
               exit 0
             fi
-            echo "Ping $i failed, retrying..."
-            sleep 5
+            echo "Ping $i failed, waiting 10s..."
+            sleep 10
           done
-          echo "All pings failed"
+          echo "All pings failed - service may be down"
           exit 0
