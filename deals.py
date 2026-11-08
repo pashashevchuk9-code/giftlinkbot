@@ -814,9 +814,12 @@ class DealService:
             return
         if offer["expires_at"] <= _now():
             await self.db.mark_expired(offer["id"])
-            await self._refresh_card(offer["id"])
-            await self._callback_alert(callback, "Срок действия предложения истёк.")
-            return
+            if callback.inline_message_id and not offer.get("inline_message_id"):
+                await self.db.set_inline_message(offer["id"], callback.inline_message_id)
+
+            await self._refresh_card(offer["id"])
+            await self._callback_alert(callback, "???? ???????? ??????????? ?????.")
+            return
 
         conflict = await self.db.find_active_nft_offer(
             nft_slug=offer["nft_slug"],
