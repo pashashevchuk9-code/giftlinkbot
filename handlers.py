@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import html
 import logging
 
@@ -548,7 +550,6 @@ async def on_inline_query(
 
         import re as _re
 
-        # Определение языка
         language = await db.get_user_language(inline_query.from_user.id)
         if len(parts) >= 2 and parts[-1].lower() in {"ua", "ru", "en", "ku"}:
             language = parts[-1].lower()
@@ -618,6 +619,20 @@ async def on_inline_query(
             name_part = nft_slug[:num_match.start()].replace("-", " ").replace("_", " ").strip()
             nft_title = f"{name_part} #{num_match.group(1)}" if name_part else nft_slug
 
+        # Попытка разрешить NFT с коротким таймаутом (3 сек)
+        nft_image_url = None
+        nft_description = None
+        nft_owner_label = None
+        try:
+            info = await asyncio.wait_for(nft.resolve(nft_url), timeout=3.0)
+            if info:
+                nft_title = info.title.strip()[:200] or nft_title
+                nft_image_url = info.image_url
+                nft_description = info.description
+                nft_owner_label = info.owner_label
+        except Exception as exc:
+            logger.warning("NFT resolve failed/timed out for %s: %s", nft_slug, exc)
+
         now_ts = _now()
         expires_at = now_ts + settings.offer_ttl_seconds
         offer_id = await db.create_offer(
@@ -633,9 +648,9 @@ async def on_inline_query(
             nft_url=nft_url,
             nft_slug=nft_slug,
             nft_title=nft_title,
-            nft_image_url=None,
-            nft_description=None,
-            nft_owner_label=None,
+            nft_image_url=nft_image_url,
+            nft_description=nft_description,
+            nft_owner_label=nft_owner_label,
             amount=amount,
             expires_at=expires_at,
             language=language,
@@ -646,34 +661,31 @@ async def on_inline_query(
         card_text = service._caption(offer)
         keyboard = offer_main_keyboard(offer_id)
 
-        result = InlineQueryResultArticle(
-            id=str(offer_id),
-            title=f"Предложить {amount} Stars за {nft_title}",
-            description=card_text.replace("\n", " ")[:200],
-            input_message_content=InputTextMessageContent(
-                message_text=card_text,
+        if nft_image_url:
+            result = InlineQueryResultPhoto(
+                id=str(offer_id),
+                photo_url=nft_image_url,
+                thumbnail_url=nft_image_url,
+                title=f"Предложить {amount} Stars за {nft_title}",
+                description=card_text.replace("\n", " ")[:200],
+                caption=card_text,
                 parse_mode="HTML",
-                link_preview_options={"is_disabled": True},
-            ),
-            reply_markup=keyboard,
-        )
-        logger.info("Inline result created: offer_id=%s", offer_id)
+                reply_markup=keyboard,
+            )
+        else:
+            result = InlineQueryResultArticle(
+                id=str(offer_id),
+                title=f"Предложить {amount} Stars за {nft_title}",
+                description=card_text.replace("\n", " ")[:200],
+                input_message_content=InputTextMessageContent(
+                    message_text=card_text,
+                    parse_mode="HTML",
+                    link_preview_options={"is_disabled": True},
+                ),
+                reply_markup=keyboard,
+            )
+        logger.info("Inline result created: offer_id=%s, has_photo=%s", offer_id, bool(nft_image_url))
         await inline_query.answer([result], cache_time=0, is_personal=True)
-
-        # Фоновое разрешение NFT
-        async def _resolve_bg():
-            try:
-                info = await nft.resolve(nft_url)
-                if info:
-                    await db.conn.execute(
-                        "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
-                        (info.title.strip()[:200] or nft_slug, info.image_url, info.description, info.owner_label, offer_id),
-                    )
-                    await db.conn.commit()
-                    logger.info("NFT resolved for offer %s: %s", offer_id, info.image_url)
-            except Exception as exc:
-                logger.warning("NFT resolve failed for %s: %s", nft_slug, exc)
-        asyncio.ensure_future(_resolve_bg())
 
     except Exception as exc:
         logger.exception("Inline query error: %s", exc)
@@ -682,10 +694,13 @@ async def on_inline_query(
         except Exception:
             pass
 
+
 @router.chosen_inline_result()
 async def on_chosen_inline_result(
     chosen: ChosenInlineResult,
     db: Database,
+    service: DealService,
+    nft: NFTResolver,
 ) -> None:
     try:
         offer_id = int(chosen.result_id)
@@ -693,6 +708,11 @@ async def on_chosen_inline_result(
         return
     if chosen.inline_message_id:
         await db.set_inline_message(offer_id, chosen.inline_message_id)
+        # Обновить карточку с полными данными NFT
+        try:
+            await service._refresh_card(offer_id)
+        except Exception as exc:
+            logger.warning("Refresh after chosen failed: %s", exc)
 
 
 @router.message(Command("FANNYTEAM", "fannyteam"))
