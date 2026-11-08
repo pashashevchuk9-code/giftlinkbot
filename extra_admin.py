@@ -256,7 +256,6 @@ async def cmd_searchuser(message: Message, db: Database, settings: Settings) -> 
     if len(parts) < 2:
         await message.reply("Использование: /searchuser ID_ИЛИ_@username")
         return
-    from access import _resolve_target if False else None
     target = None
     raw = parts[1].strip()
     if raw.isdigit():
