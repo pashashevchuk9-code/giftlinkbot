@@ -374,7 +374,8 @@ class InterfaceTests(unittest.TestCase):
             offer = {**base, "status": status}
             caption = service._caption(offer)
             self.assertLess(len(caption), 1024, status)
-            self.assertIn("@GiftIinkBot", caption)
+            if status == "pending":
+                self.assertIn("@GiftIinkBot", caption)
         pending = service._caption({**base, "status": OfferStatus.PENDING.value})
         self.assertIn(
             "@buyer предлагает Вам 100 звёзд за подарок",

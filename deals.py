@@ -220,34 +220,26 @@ class DealService:
             )
 
         if status == OfferStatus.ACCEPTED.value:
-            transfer = (
-                "автоматически через Telegram Business"
-                if offer.get("nft_transfer_mode") == "business"
-                else "вручную продавцом"
+            buyer_username = offer.get("buyer_username")
+            seller_username = offer.get("seller_username")
+            buyer_label = f"@{buyer_username}" if buyer_username else f"id{offer['buyer_id']}"
+            seller_label = f"@{seller_username}" if seller_username else f"id{offer.get('seller_id', '')}"
+            remaining = self._remaining_label(offer["expires_at"])
+            # Формат ЧЧ:ММ
+            rem_seconds = max(0, int(offer["expires_at"]) - _now())
+            rem_hours = rem_seconds // 3600
+            rem_mins = (rem_seconds % 3600) // 60
+            remaining_hhmm = f"{rem_hours}:{rem_mins:02d}"
+            deal_number = offer["id"]
+            return (
+                f"Сделка №{deal_number}\n"
+                f"Статус: Принято (Ожидает передачи)\n"
+                f"NFT: {offer['nft_url']}\n"
+                f"Покупатель: {buyer_label}\n"
+                f"Продавец: {seller_label}\n"
+                f"Сумма: {amount} звёзд\n"
+                f"Осталось {remaining_hhmm}"
             )
-            fee = int(offer.get("nft_transfer_star_count") or 0)
-            lines.extend(
-                [
-                    f"Сделка №{oid}. Продавец принял предложение.",
-                    f"Покупатель: {buyer}",
-                    f"Сумма: <b>{amount} Stars</b>",
-                    f"Передача NFT: {transfer}",
-                ]
-            )
-            if fee > 0:
-                lines.append(
-                    f"Комиссия Telegram за передачу: <b>{fee} Stars</b> "
-                    "с бизнес-аккаунта продавца."
-                )
-            lines.extend(
-                [
-                    "",
-                    f"Продавцу к выплате: <b>{amount} Stars</b>",
-                    "Подтвердите сделку, чтобы покупатель получил счёт.",
-                    self._footer("Сделка"),
-                ]
-            )
-            return "\n".join(lines)
 
         if status == OfferStatus.AWAITING_PAYMENT.value:
             lines.extend(
@@ -437,7 +429,7 @@ class DealService:
         if status == OfferStatus.PENDING.value:
             return offer_main_keyboard(offer["id"])
         if status == OfferStatus.ACCEPTED.value:
-            return offer_details_keyboard(offer["id"])
+            return accepted_offer_keyboard(offer["id"])
         return None
 
     # ------------------------------------------------------------- card output
