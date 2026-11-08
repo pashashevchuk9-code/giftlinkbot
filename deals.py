@@ -804,9 +804,6 @@ class DealService:
                 return
 
         user = callback.from_user
-        if user.id == offer.get("buyer_id"):
-            await self._callback_alert(callback, "Нельзя принять собственное предложение.")
-            return
         if not self._is_seller(offer, user):
             await self._callback_alert(callback, "Это предложение не для вас.")
             return
@@ -2009,7 +2006,7 @@ class DealService:
         # 
         # 
         if offer.get("seller_id") is None and not offer.get("seller_username"):
-            return user.id != offer.get("buyer_id")
+            return True
         return False
 
     async def _bind_seller_if_needed(self, offer: dict[str, Any], user: User) -> None:
