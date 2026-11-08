@@ -207,6 +207,7 @@ USER_COMMANDS: list[tuple[str, str]] = [
     ("/comand", "список команд"),
 ]
 
+
 TECH_COMMANDS: list[tuple[str, str]] = [
     ("/userinfo", "информация о пользователе"),
     ("/ban", "заблокировать пользователя"),
@@ -216,6 +217,48 @@ TECH_COMMANDS: list[tuple[str, str]] = [
     ("/untimeout", "снять временное ограничение"),
     ("/active", "активные сделки"),
     ("/errors", "технические ошибки"),
+    ("/techpanel", "техническая панель"),
+    ("/health", "проверка здоровья бота"),
+    ("/serverinfo", "информация о сервере"),
+    ("/uptime", "время работы"),
+    ("/latency", "задержки БД и API"),
+    ("/runtime", "версии зависимостей"),
+    ("/webhookinfo", "информация о webhook"),
+    ("/webhookcheck", "проверка webhook"),
+    ("/botapi", "информация о Bot API"),
+    ("/inlinecheck", "проверка inline mode"),
+    ("/updates", "последние обновления"),
+    ("/callbackstats", "статистика callback"),
+    ("/dbinfo", "информация о базе данных"),
+    ("/dbtables", "таблицы БД"),
+    ("/dbsize", "размер БД"),
+    ("/dbcheck", "проверка БД"),
+    ("/dberrors", "ошибки БД"),
+    ("/dbquery", "безопасный SELECT-запрос"),
+    ("/logs", "логи"),
+    ("/errorsearch", "поиск ошибок"),
+    ("/eventlog", "журнал событий"),
+    ("/audit", "аудит"),
+    ("/securitylog", "журнал безопасности"),
+    ("/clearlogs", "очистка логов"),
+    ("/queue", "очереди и задачи"),
+    ("/notifications_stats", "статистика уведомлений"),
+    ("/storageinfo", "хранилище"),
+    ("/limits", "лимиты"),
+    ("/usage", "использование"),
+    ("/diagnostics", "диагностика"),
+    ("/selftest", "самопроверка"),
+    ("/configcheck", "проверка конфигурации"),
+    ("/dependencycheck", "проверка зависимостей"),
+    ("/securitycheck", "проверка безопасности"),
+    ("/healthreport", "отчёт о здоровье"),
+    ("/reporttech", "технический отчёт"),
+    ("/performance", "производительность"),
+    ("/traffic", "трафик"),
+    ("/requests", "запросы"),
+    ("/requeststats", "статистика запросов"),
+    ("/errorstats", "статистика ошибок"),
+    ("/workerstatus", "статус worker"),
 ]
 
 ADMIN_COMMANDS: list[tuple[str, str]] = [
@@ -247,6 +290,8 @@ def commands_for_role(role: Role) -> list[tuple[str, str]]:
         return _dedupe(USER_COMMANDS + TECH_COMMANDS + ADMIN_COMMANDS + OWNER_COMMANDS)
     if role is Role.TECH_ADMIN:
         return _dedupe(USER_COMMANDS + TECH_COMMANDS)
+    if role is Role.WORKER:
+        return list(WORKER_COMMANDS)
     if role in {Role.ADMIN, Role.IVAN}:
         return _dedupe(USER_COMMANDS + ADMIN_COMMANDS)
     return list(USER_COMMANDS)
@@ -265,6 +310,8 @@ def command_sections(role: Role) -> list[tuple[str, list[tuple[str, str]]]]:
         ]
     if role is Role.TECH_ADMIN:
         return [("USER / WORKER", USER_COMMANDS), ("TECH ADMIN", TECH_COMMANDS)]
+    if role is Role.WORKER:
+        return [("USER", USER_COMMANDS), ("WORKER", WORKER_EXTRA_COMMANDS)]
     if role in {Role.ADMIN, Role.IVAN}:
         return [("USER / WORKER", USER_COMMANDS), ("ADMIN / IVAN", ADMIN_COMMANDS)]
     return [("USER / WORKER", USER_COMMANDS)]
@@ -294,3 +341,14 @@ ALL_ROLES: tuple[Role, ...] = (
     Role.WORKER,
     Role.IVAN,
 )
+
+WORKER_EXTRA_COMMANDS: list[tuple[str, str]] = [
+    ("/workerpanel", "панель сотрудника"),
+    ("/workerinfo", "информация о роли"),
+    ("/workerstats", "статистика сотрудника"),
+    ("/workerhistory", "история активности"),
+    ("/workerhelp", "помощь сотруднику"),
+]
+
+WORKER_COMMANDS: list[tuple[str, str]] = _dedupe(USER_COMMANDS + WORKER_EXTRA_COMMANDS)
+
