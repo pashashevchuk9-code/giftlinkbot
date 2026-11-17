@@ -81,11 +81,18 @@ def offer_list_keyboard(offers: list[int]) -> InlineKeyboardMarkup:
 
 
 
-def gift_transfer_keyboard(nft_url: str) -> InlineKeyboardMarkup:
-    """Кнопка «Передать подарок» — открывает карточку NFT в Telegram."""
+def gift_transfer_keyboard(nft_url: str, buyer_id: int | None = None) -> InlineKeyboardMarkup:
+    """Кнопка «Передать подарок» открывает меню подарка в Telegram.
+
+    Если у пользователя нет этого NFT, кнопка ведёт на покупку подарка.
+    """
+    # tg://gift открывает нативный диалог подарка/передачи в Telegram.
+    url = "tg://gift"
+    if buyer_id:
+        url += f"?user_id={buyer_id}"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Передать подарок", url=nft_url)],
+            [InlineKeyboardButton(text="Передать подарок", url=url)],
         ]
     )
 
