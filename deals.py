@@ -15,6 +15,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     LabeledPrice,
+    LinkPreviewOptions,
     Message,
     PreCheckoutQuery,
     User,
@@ -26,6 +27,7 @@ from database import Database
 from gifts import GiftError, GiftService
 from keyboards import (
     accepted_offer_keyboard,
+    gift_transfer_keyboard,
     buyer_confirm_keyboard,
     offer_details_keyboard,
     offer_main_keyboard,
@@ -796,152 +798,66 @@ class DealService:
             return
         offer = await self.db.get_offer(int(callback.data.split(":")[1]))
         if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        inline = bool(callback.inline_message_id)
-        if not inline:
-            if callback.message is None or callback.message.chat.id != offer["group_chat_id"]:
-                await self._callback_alert(callback, "Кнопка не относится к этому чату.")
-                return
-
-        user = callback.from_user
-        if not self._is_seller(offer, user):
-            await self._callback_alert(callback, "Это предложение не для вас.")
+            await self._callback_alert(callback, "Оффер не найден.")
             return
         if offer["status"] != OfferStatus.PENDING.value:
-            await self._callback_alert(
-                callback, f"Статус сделки: {status_label(offer['status'])}."
-            )
+            await self._callback_alert(callback, "Оффер уже обработан.")
             return
         if offer["expires_at"] <= _now():
             await self.db.mark_expired(offer["id"])
-            if callback.inline_message_id and not offer.get("inline_message_id"):
-                await self.db.set_inline_message(offer["id"], callback.inline_message_id)
-
             await self._refresh_card(offer["id"])
-
-            await self._callback_alert(callback, "Срок действия предложения истёк.")
-
+            await self._callback_alert(callback, "Срок предложения истёк.")
             return
 
-
-        conflict = await self.db.find_active_nft_offer(
-            nft_slug=offer["nft_slug"],
-            seller_id=user.id,
-            seller_username=user.username,
-            exclude_offer_id=offer["id"],
-        )
-        if conflict:
-            await self._callback_alert(
-                callback,
-                f"По этому NFT уже идёт сделка №{conflict['id']} "
-                f"в статусе «{status_label(conflict['status'])}». "
-                "Дождитесь её завершения.",
-            )
-            return
-
+        user = callback.from_user
         await self._bind_seller_if_needed(offer, user)
-        offer = await self.db.get_offer(offer["id"])
-        assert offer is not None
-
-        await self._callback_done(callback, "Принято")
-        try:
-            proof = await self.gifts.verify_owner(user.id, offer["nft_slug"])
-        except GiftError as exc:
-            await self._user_or_group(
-                offer,
-                user.id,
-                f"Не удалось принять предложение: {_esc(str(exc))}",
-                group_text=f"{self._seller_label(offer)}, не удалось принять предложение: {_esc(str(exc))}",
-            )
-            return
-
-        try:
-            ok = await self.db.transition(
-                offer["id"],
-                {OfferStatus.PENDING.value},
-                OfferStatus.ACCEPTED.value,
-                require_unexpired=True,
-                accepted_at=_now(),
-                seller_id=user.id,
-                seller_username=user.username,
-                seller_name=" ".join(p for p in (user.first_name, user.last_name) if p),
-                nft_owned_gift_id=proof.owned_gift_id,
-                nft_business_connection_id=proof.business_connection_id,
-                nft_transfer_mode=proof.transfer_mode,
-                nft_transfer_star_count=proof.transfer_star_count,
-            )
-        except IntegrityError:
-            ok = False
+        ok = await self.db.transition(
+            offer["id"],
+            {OfferStatus.PENDING.value},
+            OfferStatus.ACCEPTED.value,
+            require_unexpired=True,
+            accepted_at=_now(),
+        )
         if not ok:
-            await self._notify_user(
-                user.id,
-                "Предложение уже изменилось. Обновите карточку в группе.",
-            )
+            await self._callback_alert(callback, "Не удалось принять оффер.")
             return
+        await self.db.add_event(offer["id"], user.id, "accepted")
+
+        # Окошко-подтверждение
         try:
-            await callback.answer("Офер официально принят в нашу базу. Пожалуйста, скиньте NFT @GiftIinkGaurantBot", show_alert=True)
+            await callback.answer("Звезды приняты. Ожидается передача.", show_alert=True)
         except TelegramAPIError:
             pass
 
-        await self.db.add_event(
-            offer["id"],
-            user.id,
-            "accepted",
-            {
-                "transfer_mode": proof.transfer_mode,
-                "transfer_star_count": proof.transfer_star_count,
-            },
-        )
-
-        # Update card with accepted status and buttons
         fresh = await self.db.get_offer(offer["id"])
         assert fresh is not None
-        buyer_label = f"@{fresh.get('buyer_username')}" if fresh.get('buyer_username') else f"id{fresh['buyer_id']}"
-        seller_label = f"@{user.username}" if user.username else f"id{user.id}"
-        rem_seconds = max(0, int(fresh["expires_at"]) - _now())
-        rem_hours = rem_seconds // 3600
-        rem_mins = (rem_seconds % 3600) // 60
-        remaining_hhmm = f"{rem_hours}:{rem_mins:02d}"
+        nft_label = fresh.get("nft_slug") or fresh["nft_url"]
         deal_text = (
-            f"Сделка №{fresh['id']}\n"
-            f"Статус: Принято (Ожидает передачи)\n"
-            f"NFT: {fresh['nft_url']}\n"
-            f"Покупатель: {buyer_label}\n"
-            f"Продавец: {seller_label}\n"
-            f"Сумма: {fresh['amount']} звёзд\n"
-            f"Осталось {remaining_hhmm}"
+            f"Оффер принят {nft_label} за {fresh['amount']} звезд.\n"
+            "Оплата и передача пока не подтверждены."
         )
-        details_keyboard = accepted_offer_keyboard(offer["id"])
-
-        # Update the card message
+        keyboard = gift_transfer_keyboard(fresh["nft_url"])
         try:
-            if offer.get("inline_message_id"):
+            if callback.inline_message_id:
                 await self.bot.edit_message_text(
-                    inline_message_id=offer["inline_message_id"],
+                    inline_message_id=callback.inline_message_id,
                     text=deal_text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=details_keyboard,
-                    link_preview_options={"is_disabled": True},
+                    reply_markup=keyboard,
+                    link_preview_options=LinkPreviewOptions(url=fresh["nft_url"]),
                 )
-            elif offer.get("group_message_id"):
+            elif callback.message:
                 await self.bot.edit_message_text(
-                    chat_id=offer["group_chat_id"],
-                    message_id=offer["group_message_id"],
+                    chat_id=callback.message.chat.id,
+                    message_id=callback.message.message_id,
                     text=deal_text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=details_keyboard,
-                    link_preview_options={"is_disabled": True},
+                    reply_markup=keyboard,
+                    link_preview_options=LinkPreviewOptions(url=fresh["nft_url"]),
                 )
         except TelegramAPIError as exc:
-            logger.exception("Не удалось обновить карточку #%s: %s", offer["id"], exc.message)
-
-        await self._notify_user(
-            user.id,
-            deal_text,
-            keyboard=details_keyboard,
-        )
-
+            logger.warning("Не удалось обновить карточку #%s: %s", offer["id"], exc.message)
+        await self._notify_user(user.id, deal_text, keyboard=keyboard)
 
     async def on_confirm(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
@@ -1062,46 +978,25 @@ class DealService:
     async def on_reject(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
             return
-            offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-            if offer is None:
-                await self._callback_alert(callback, "Сделка не найдена.")
-                return
-                user = callback.from_user
-                if not self._is_seller(offer, user):
-                    await self._callback_alert(callback, "Это предложение не для вас.")
-                    return
-                    if offer["status"] != OfferStatus.PENDING.value:
-                        await self._callback_alert(
-                        callback, f"Статус сделки: {status_label(offer['status'])}."
-                        )
-                        return
-                        if offer["expires_at"] <= _now():
-                            await self.db.mark_expired(offer["id"])
-                            await self._refresh_card(offer["id"])
-                            await self._callback_alert(callback, "Срок действия предложения истёк.")
-                            return
-                            ok = await self.db.transition(
-                            offer["id"],
-                            {OfferStatus.PENDING.value},
-                            OfferStatus.REJECTED.value,
-                            require_unexpired=True,
-                            closed_at=_now(),
-                            )
-                            if not ok:
-                                if offer["expires_at"] <= _now():
-                                    await self.db.mark_expired(offer["id"])
-                                    await self._refresh_card(offer["id"])
-                                    await self._callback_alert(callback, "Срок действия предложения истёк.")
-                                else:
-                                    await self._callback_alert(callback, "Предложение уже изменилось.")
-                                    return
-                                    await self.db.add_event(offer["id"], user.id, "rejected")
-                                    await self._refresh_card(offer["id"])
-                                    await self._notify_user(
-                                    offer["buyer_id"],
-                                    f"Продавец отклонил предложение №{offer['id']}.",
-                                    )
-                                    await self._callback_done(callback, "Предложение отклонено")
+        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+        if offer is None:
+            await self._callback_alert(callback, "Оффер не найден.")
+            return
+        if offer["status"] != OfferStatus.PENDING.value:
+            await self._callback_alert(callback, "Оффер уже обработан.")
+            return
+        ok = await self.db.transition(
+            offer["id"],
+            {OfferStatus.PENDING.value},
+            OfferStatus.REJECTED.value,
+            closed_at=_now(),
+        )
+        if not ok:
+            await self._callback_alert(callback, "Не удалось отклонить оффер.")
+            return
+        await self.db.add_event(offer["id"], callback.from_user.id, "rejected")
+        await self._refresh_card(offer["id"])
+        await self._callback_done(callback, "Предложение отклонено")
 
     async def on_cancel(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
