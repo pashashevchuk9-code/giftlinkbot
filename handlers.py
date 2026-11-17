@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-from urllib.parse import quote
 from io import BytesIO
 
 from aiogram import Bot, F, Router
@@ -19,8 +18,8 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
-    InlineQueryResultPhoto,
     InputTextMessageContent,
+    LinkPreviewOptions,
     Message,
     PreCheckoutQuery,
 )
@@ -610,17 +609,15 @@ async def on_inline_query(
         keyboard = offer_main_keyboard(offer_id)
         title = f"Оффер на {amount} Stars за {nft_title}"
 
-        # Обычная карточка Telegram: фото по публичной ссылке + полный текст + кнопки.
-        nft_image_url = None
+        # Официальная карточка NFT Telegram формируется самим Telegram
+        # по ссылке t.me/nft/... через link preview.
         try:
             info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
-            if info:
-                if info.title.strip():
-                    nft_title = info.title.strip()[:200]
-                nft_image_url = info.image_url
+            if info and info.title.strip():
+                nft_title = info.title.strip()[:200]
                 await db.conn.execute(
-                    "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
-                    (nft_title, info.image_url, info.description, info.owner_label, offer_id),
+                    "UPDATE offers SET nft_title=?, nft_description=?, nft_owner_label=? WHERE id=?",
+                    (nft_title, info.description, info.owner_label, offer_id),
                 )
                 try:
                     await db.conn.commit()
@@ -631,32 +628,19 @@ async def on_inline_query(
 
         card_text = service._caption(await db.get_offer(offer_id) or offer)
 
-        if nft_image_url:
-            proxy_photo = "https://giftlinkbot.onrender.com/nft_image?url=" + quote(nft_image_url, safe="")
-            result = InlineQueryResultPhoto(
-                id=str(offer_id),
-                photo_url=proxy_photo,
-                thumbnail_url=proxy_photo,
-                title=title,
-                description=card_text.replace("\n", " ")[:200],
-                caption=card_text,
+        result = InlineQueryResultArticle(
+            id=str(offer_id),
+            title=title,
+            description=card_text.replace("\n", " ")[:200],
+            input_message_content=InputTextMessageContent(
+                message_text=card_text,
                 parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-        else:
-            result = InlineQueryResultArticle(
-                id=str(offer_id),
-                title=title,
-                description=card_text.replace("\n", " ")[:200],
-                input_message_content=InputTextMessageContent(
-                    message_text=card_text,
-                    parse_mode="HTML",
-                    link_preview_options={"is_disabled": True},
-                ),
-                reply_markup=keyboard,
-            )
+                link_preview_options=LinkPreviewOptions(url=nft_url),
+            ),
+            reply_markup=keyboard,
+        )
         await inline_query.answer([result], cache_time=0, is_personal=True)
-        logger.info("Inline result ready: offer_id=%s, has_photo=%s", offer_id, bool(nft_image_url))
+        logger.info("Inline result ready: offer_id=%s", offer_id)
 
     except Exception as exc:
         logger.exception("Inline query error: %s", exc)
