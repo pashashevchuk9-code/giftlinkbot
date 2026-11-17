@@ -216,7 +216,7 @@ class DealService:
                 stars=self._stars_label(amount),
                 nft=self._nft_label(offer),
                 remaining=self._remaining_label(offer["expires_at"]),
-                footer=self._footer(footer_label),
+                footer="",
             )
             return "\n".join(lines + [""]) + body
 
@@ -2020,15 +2020,9 @@ class DealService:
                     # ----------------------------------------------------------------- helpers
 
     def _is_seller(self, offer: dict[str, Any], user: User) -> bool:
-            if offer.get("seller_id") is not None:
-                return offer["seller_id"] == user.id
-                if offer.get("seller_username") and user.username:
-                    return offer["seller_username"].lower() == user.username.lower()
-                    #
-                    #
-                    if offer.get("seller_id") is None and not offer.get("seller_username"):
-                        return True
-                        return False
+        # Принять офер может любой пользователь; владельца NFT проверяем отдельно
+        # через gifts.verify_owner.
+        return True
 
     async def _bind_seller_if_needed(self, offer: dict[str, Any], user: User) -> None:
             if offer.get("seller_id") is None:
