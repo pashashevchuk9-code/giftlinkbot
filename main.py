@@ -181,9 +181,25 @@ async def start_health_server() -> web.AppRunner | None:
             }
         )
 
+    async def nft_image(request: web.Request) -> web.Response:
+        url = request.query.get("url", "")
+        if not url.startswith(("https://cdn", "https://telegram.org", "https://t.me")):
+            return web.Response(status=400, text="bad url")
+        try:
+            async with aiohttp.ClientSession() as img_session:
+                async with img_session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return web.Response(status=502, text="upstream error")
+                    body = await resp.read()
+                    ctype = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
+            return web.Response(body=body, content_type=ctype)
+        except Exception:
+            return web.Response(status=502, text="fetch failed")
+
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/nft_image", nft_image)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
