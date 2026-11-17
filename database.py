@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -246,14 +248,241 @@ def _now() -> int:
     return int(time.time())
 
 
-def _row_to_dict(row: aiosqlite.Row | None) -> dict[str, Any] | None:
-    return dict(row) if row is not None else None
+def _row_to_dict(row: Any) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    if hasattr(row, "asdict"):
+        try:
+            return row.asdict()
+        except Exception:
+            pass
+    if hasattr(row, "_asdict"):
+        try:
+            return row._asdict()
+        except Exception:
+            pass
+    try:
+        return dict(row)
+    except Exception:
+        return {str(i): v for i, v in enumerate(row)}
+
+
+class TursoRow:
+    """Лёгкая обёртка над строкой libsql, ведущая себя и как кортеж, и как словарь."""
+
+    __slots__ = ("_columns", "_values", "_index")
+
+    def __init__(self, columns: tuple[str, ...], values: tuple[Any, ...]) -> None:
+        self._columns = tuple(columns)
+        self._values = tuple(values)
+        self._index = {name: i for i, name in enumerate(self._columns)}
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, str):
+            return self._values[self._index[key]]
+        if isinstance(key, slice):
+            return self._values[key]
+        return self._values[key]
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __iter__(self) -> Any:
+        return iter(self._values)
+
+    def __repr__(self) -> str:
+        return repr(self._values)
+
+    def keys(self) -> Any:
+        return self._index.keys()
+
+    def values(self) -> tuple[Any, ...]:
+        return self._values
+
+    def items(self) -> list[tuple[str, Any]]:
+        return [(name, self._values[i]) for name, i in self._index.items()]
+
+    def asdict(self) -> dict[str, Any]:
+        return {name: self._values[i] for name, i in self._index.items()}
+
+    _asdict = asdict
+
+
+class TursoCursor:
+    """Обёртка над ResultSet libsql_client с интерфейсом aiosqlite-курсора."""
+
+    def __init__(self, result_set: Any) -> None:
+        self._rows: list[TursoRow] = []
+        columns = getattr(result_set, "columns", None) or ()
+        for row in getattr(result_set, "rows", None) or []:
+            try:
+                values = tuple(row)
+            except Exception:
+                values = tuple(getattr(row, "_values", ()))
+            self._rows.append(TursoRow(tuple(columns), values))
+        self._pos = 0
+        self.rowcount = getattr(result_set, "rows_affected", 0) or 0
+        self.lastrowid = getattr(result_set, "last_insert_rowid", None)
+
+    async def fetchone(self) -> TursoRow | None:
+        if self._pos >= len(self._rows):
+            return None
+        row = self._rows[self._pos]
+        self._pos += 1
+        return row
+
+    async def fetchall(self) -> list[TursoRow]:
+        rows = self._rows[self._pos:]
+        self._pos = len(self._rows)
+        return rows
+
+    async def fetchmany(self, size: int = 1) -> list[TursoRow]:
+        end = min(self._pos + size, len(self._rows))
+        rows = self._rows[self._pos:end]
+        self._pos = end
+        return rows
+
+    async def close(self) -> None:
+        return None
+
+
+class TursoConnection:
+    """Обёртка над libsql_client.Client, совместимая с aiosqlite.Connection."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._tx: Any = None
+        self.row_factory: Any = None
+        self._lock = asyncio.Lock()
+        self._transactions_supported: bool = True
+
+    @property
+    def client(self) -> Any:
+        return self._client
+
+    async def execute(self, sql: str, parameters: Any = None) -> TursoCursor:
+        async with self._lock:
+            return await self._execute_impl(sql, parameters)
+
+    async def _execute_impl(self, sql: str, parameters: Any = None) -> TursoCursor:
+        statement = sql.strip() if isinstance(sql, str) else sql
+        upper = statement.upper() if isinstance(statement, str) else ""
+
+        # Эмуляция ручных транзакций через libsql Transaction.
+        if upper.startswith("BEGIN"):
+            if self._transactions_supported and self._tx is None:
+                try:
+                    self._tx = self._client.transaction()
+                    begin_fut = getattr(self._tx, "_begin_fut", None)
+                    if begin_fut is not None:
+                        try:
+                            await begin_fut
+                        except Exception:
+                            pass
+                except Exception:
+                    # HTTP-клиент Turso не поддерживает транзакции.
+                    self._transactions_supported = False
+                    self._tx = None
+            return TursoCursor(_EmptyResultSet())
+
+        if upper.startswith("COMMIT"):
+            if self._tx is not None:
+                try:
+                    await self._tx.commit()
+                except Exception:
+                    pass
+                self._tx = None
+            return TursoCursor(_EmptyResultSet())
+
+        if upper.startswith("ROLLBACK"):
+            if self._tx is not None:
+                try:
+                    await self._tx.rollback()
+                except Exception:
+                    pass
+                self._tx = None
+            return TursoCursor(_EmptyResultSet())
+
+        if parameters is None:
+            args = None
+        elif isinstance(parameters, (tuple, list)):
+            args = list(parameters)
+        elif isinstance(parameters, dict):
+            args = parameters
+        else:
+            args = (parameters,)
+
+        executor = self._tx if self._tx is not None else self._client
+        try:
+            result_set = await executor.execute(statement, args)
+        except Exception:
+            # Если транзакция сломалась, сбросим её.
+            if self._tx is not None:
+                try:
+                    await self._tx.rollback()
+                except Exception:
+                    pass
+                self._tx = None
+            raise
+        return TursoCursor(result_set)
+
+    async def executescript(self, script: str) -> None:
+        # libsql не поддерживает executescript; выполняем по одному оператору.
+        # journal_mode для Turso пропускаем, foreign_keys включаем.
+        statements = [s.strip() for s in script.split(";")]
+        for stmt in statements:
+            if not stmt:
+                continue
+            upper = stmt.upper()
+            if upper.startswith("PRAGMA JOURNAL_MODE"):
+                continue
+            # executescript в aiosqlite неявно коммитит; здесь каждый execute автокоммит.
+            await self.execute(stmt)
+            # execute для DDL автокоммитится на сервере.
+
+    async def close(self) -> None:
+        if self._tx is not None:
+            try:
+                await self._tx.rollback()
+            except Exception:
+                pass
+            self._tx = None
+        try:
+            await self._client.close()
+        except Exception:
+            pass
+
+    async def commit(self) -> None:
+        if self._tx is not None:
+            try:
+                await self._tx.commit()
+            except Exception:
+                pass
+            self._tx = None
+
+    async def rollback(self) -> None:
+        if self._tx is not None:
+            try:
+                await self._tx.rollback()
+            except Exception:
+                pass
+            self._tx = None
+
+
+class _EmptyResultSet:
+    def __init__(self) -> None:
+        self.columns = ()
+        self.rows = []
+        self.rows_affected = 0
+        self.last_insert_rowid = None
 
 
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._conn: aiosqlite.Connection | None = None
+        self._conn: Any = None
+        self._turso: bool = False
+        self._client: Any = None
 
     @property
     def conn(self) -> aiosqlite.Connection:
@@ -262,14 +491,34 @@ class Database:
         return self._conn
 
     async def init(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(
-            self.path,
-            isolation_level=None,
-            timeout=10,
-        )
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.execute("PRAGMA busy_timeout=5000")
+        turso_url = os.getenv("TURSO_DATABASE_URL", "").strip()
+        turso_token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+        if turso_url:
+            # WebSocket недоступен для Turso; используем HTTP-клиент.
+            if turso_url.startswith("libsql://"):
+                turso_url = "https://" + turso_url[len("libsql://"):]
+            self._turso = True
+            try:
+                import libsql_client
+            except Exception as exc:
+                raise RuntimeError(
+                    "TURSO_DATABASE_URL задан, но libsql_client не установлен"
+                ) from exc
+            self._client = libsql_client.create_client(
+                turso_url, auth_token=turso_token or None
+            )
+            self._conn = TursoConnection(self._client)
+        else:
+            self._turso = False
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = await aiosqlite.connect(
+                self.path,
+                isolation_level=None,
+                timeout=10,
+            )
+            self._conn.row_factory = aiosqlite.Row
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+
         await self._conn.executescript(SCHEMA)
         await self._migrate()
 
@@ -371,12 +620,7 @@ class Database:
                 "UPDATE users SET role=? WHERE user_id=? AND role<>?",
                 (Role.OWNER.value, user_id, Role.OWNER.value),
             )
-        else:
-            # OWNER определяется только ID из конфигурации.
-            await self.conn.execute(
-                "UPDATE users SET role=? WHERE user_id=? AND role=?",
-                (Role.USER.value, user_id, Role.OWNER.value),
-            )
+        # Роли, назначенные через БД (/setrole), не сбрасываются автоматически.
         user = await self.get_user(user_id)
         assert user is not None
         return user
@@ -1083,11 +1327,17 @@ class Database:
             )
             if cursor.rowcount != 1:
                 await self.conn.execute("ROLLBACK")
+                await self.conn.execute(
+                    "DELETE FROM payment_charges WHERE charge_id=?", (charge_id,)
+                )
                 return False
             await self.conn.execute("COMMIT")
             return True
         except Exception:
             await self.conn.execute("ROLLBACK")
+            await self.conn.execute(
+                "DELETE FROM payment_charges WHERE charge_id=?", (charge_id,)
+            )
             raise
 
     async def mark_nft_transferred(
