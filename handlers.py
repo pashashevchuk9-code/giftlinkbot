@@ -617,17 +617,25 @@ async def on_inline_query(
             try:
                 info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
                 if info and info.image_url:
-                    import aiohttp
-                    async with aiohttp.ClientSession() as s:
-                        async with s.get(info.image_url, timeout=10) as resp:
-                            if resp.status == 200:
-                                sent = await bot.send_photo(
-                                    chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
-                                    photo=BufferedInputFile(await resp.read(), filename="nft.jpg"),
-                                )
-                                if sent.photo:
-                                    photo_file_id = sent.photo[-1].file_id
-                                    await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
+                    # Фото для кэша отправляем только админам и Ивану.
+                    recipients = list(settings.admin_ids)
+                    for role in (Role.ADMIN, Role.IVAN):
+                        for u in await db.get_users_by_role(role):
+                            uid = int(u["user_id"])
+                            if uid not in recipients:
+                                recipients.append(uid)
+                    if recipients:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as s:
+                            async with s.get(info.image_url, timeout=10) as resp:
+                                if resp.status == 200:
+                                    sent = await bot.send_photo(
+                                        chat_id=recipients[0],
+                                        photo=BufferedInputFile(await resp.read(), filename="nft.jpg"),
+                                    )
+                                    if sent.photo:
+                                        photo_file_id = sent.photo[-1].file_id
+                                        await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
                     await db.conn.execute(
                         "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
                         (info.title.strip()[:200] or nft_title, info.image_url, info.description, info.owner_label, offer_id),
