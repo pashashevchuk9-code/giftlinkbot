@@ -514,6 +514,46 @@ class DealService:
         self._last_card_caption[offer_id] = caption
         return offer
 
+    async def _edit_card_text(
+        self,
+        offer: dict[str, Any],
+        text: str,
+        *,
+        keyboard: Any = None,
+        preview_url: str | None = None,
+    ) -> None:
+        """Редактирует текст уже отправленной карточки напрямую."""
+        try:
+            if offer.get("inline_message_id"):
+                await self.bot.edit_message_text(
+                    inline_message_id=offer["inline_message_id"],
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                    link_preview_options=(
+                        LinkPreviewOptions(url=preview_url)
+                        if preview_url
+                        else LinkPreviewOptions(is_disabled=True)
+                    ),
+                )
+            elif offer.get("group_message_id"):
+                await self.bot.edit_message_text(
+                    chat_id=offer["group_chat_id"],
+                    message_id=offer["group_message_id"],
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                    link_preview_options=(
+                        LinkPreviewOptions(url=preview_url)
+                        if preview_url
+                        else LinkPreviewOptions(is_disabled=True)
+                    ),
+                )
+            elif callback_message_id := (None):
+                pass
+        except TelegramAPIError as exc:
+            logger.warning("Не удалось отредактировать карточку #%s: %s", offer.get("id"), exc.message)
+
     async def _notify_user(
         self,
         user_id: int,
@@ -823,41 +863,30 @@ class DealService:
             return
         await self.db.add_event(offer["id"], user.id, "accepted")
 
-        # Окошко-подтверждение
-        try:
-            await callback.answer("Звезды приняты. Ожидается передача.", show_alert=True)
-        except TelegramAPIError:
-            pass
+        await callback.answer()
 
+        # Редактируем текст самой карточки напрямую.
         fresh = await self.db.get_offer(offer["id"])
         assert fresh is not None
-        nft_label = fresh.get("nft_slug") or fresh["nft_url"]
+        if fresh.get("inline_message_id") and not offer.get("inline_message_id"):
+            await self.db.set_inline_message(offer["id"], fresh["inline_message_id"])
+        card = await self.db.get_offer(offer["id"])
+        assert card is not None
+        if card.get("inline_message_id") != callback.inline_message_id and callback.inline_message_id:
+            await self.db.set_inline_message(offer["id"], callback.inline_message_id)
+            card = await self.db.get_offer(offer["id"])
+        nft_label = card.get("nft_slug") or card["nft_url"]
         deal_text = (
-            f"Оффер принят {nft_label} за {fresh['amount']} звезд.\n"
+            f"Оффер принят {nft_label} за {card['amount']} звезд.\n"
             "Оплата и передача пока не подтверждены."
         )
-        keyboard = gift_transfer_keyboard(fresh["nft_url"])
-        try:
-            if callback.inline_message_id:
-                await self.bot.edit_message_text(
-                    inline_message_id=callback.inline_message_id,
-                    text=deal_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                    link_preview_options=LinkPreviewOptions(url=fresh["nft_url"]),
-                )
-            elif callback.message:
-                await self.bot.edit_message_text(
-                    chat_id=callback.message.chat.id,
-                    message_id=callback.message.message_id,
-                    text=deal_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                    link_preview_options=LinkPreviewOptions(url=fresh["nft_url"]),
-                )
-        except TelegramAPIError as exc:
-            logger.warning("Не удалось обновить карточку #%s: %s", offer["id"], exc.message)
-        await self._notify_user(user.id, deal_text, keyboard=keyboard)
+        keyboard = gift_transfer_keyboard(card["nft_url"])
+        await self._edit_card_text(
+            card,
+            deal_text,
+            keyboard=keyboard,
+            preview_url=card["nft_url"],
+        )
 
     async def on_confirm(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
@@ -995,8 +1024,13 @@ class DealService:
             await self._callback_alert(callback, "Не удалось отклонить оффер.")
             return
         await self.db.add_event(offer["id"], callback.from_user.id, "rejected")
-        await self._refresh_card(offer["id"])
-        await self._callback_done(callback, "Предложение отклонено")
+        card = await self.db.get_offer(offer["id"])
+        assert card is not None
+        if callback.inline_message_id and not card.get("inline_message_id"):
+            await self.db.set_inline_message(offer["id"], callback.inline_message_id)
+            card = await self.db.get_offer(offer["id"])
+        await callback.answer()
+        await self._edit_card_text(card, "Предложение отклонено")
 
     async def on_cancel(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
