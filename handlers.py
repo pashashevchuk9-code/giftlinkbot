@@ -538,6 +538,16 @@ async def on_inline_query(
 
         text = (inline_query.query or "").strip()
         parts = text.split()
+        # Склеить ссылку, разорванную переносом строки на телефоне:
+        # "https://t.me/nft/Name" + "-123" + "100 ru" -> "https://t.me/nft/Name-123" + "100 ru"
+        if parts and parts[0].startswith("http"):
+            glued = []
+            i = 0
+            while i < len(parts) and not parts[i].isdigit():
+                glued.append(parts[i])
+                i += 1
+            if glued:
+                parts = ["".join(glued)] + parts[i:]
         if not parts:
             await inline_query.answer(
                 [],
