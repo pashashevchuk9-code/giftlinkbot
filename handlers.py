@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from urllib.parse import quote
 from io import BytesIO
 
 from aiogram import Bot, F, Router
@@ -631,10 +632,11 @@ async def on_inline_query(
         card_text = service._caption(await db.get_offer(offer_id) or offer)
 
         if nft_image_url:
+            proxy_photo = "https://giftlinkbot.onrender.com/nft_image?url=" + quote(nft_image_url, safe="")
             result = InlineQueryResultPhoto(
                 id=str(offer_id),
-                photo_url=nft_image_url,
-                thumbnail_url=nft_image_url,
+                photo_url=proxy_photo,
+                thumbnail_url=proxy_photo,
                 title=title,
                 description=card_text.replace("\n", " ")[:200],
                 caption=card_text,
