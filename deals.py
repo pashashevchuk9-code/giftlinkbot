@@ -211,13 +211,14 @@ class DealService:
             if lang not in self._LANG_TEMPLATES:
                 lang = "ru"
             tmpl, footer_label = self._LANG_TEMPLATES[lang]
-            return tmpl.format(
+            body = tmpl.format(
                 buyer=buyer,
                 stars=self._stars_label(amount),
                 nft=self._nft_label(offer),
                 remaining=self._remaining_label(offer["expires_at"]),
                 footer=self._footer(footer_label),
             )
+            return "\n".join(lines + [""]) + body
 
         if status == OfferStatus.ACCEPTED.value:
             buyer_username = offer.get("buyer_username")
@@ -933,7 +934,7 @@ class DealService:
                     link_preview_options={"is_disabled": True},
                 )
         except TelegramAPIError as exc:
-            logger.exception("Не удалось обновить карточку #%s", offer["id"])
+            logger.exception("Не удалось обновить карточку #%s: %s", offer["id"], exc.message)
 
         await self._notify_user(
             user.id,
@@ -941,442 +942,443 @@ class DealService:
             keyboard=details_keyboard,
         )
 
+
     async def on_confirm(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
             return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        if not self._is_seller(offer, user):
-            await self._callback_alert(callback, "Это предложение не для вас.")
-            return
-        if offer["status"] != OfferStatus.ACCEPTED.value:
-            await self._callback_alert(
-                callback, f"Статус сделки: {status_label(offer['status'])}."
-            )
-            return
-        if not self.settings.payments_available:
-            await self._callback_alert(
-                callback,
-                "Оплата Stars отключена. Настройте ADMIN_IDS, PAYMENTS_ENABLED "
-                "и OPERATOR_PAYOUT_ACK в .env.",
-            )
-            return
+            offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+            if offer is None:
+                await self._callback_alert(callback, "Сделка не найдена.")
+                return
+                user = callback.from_user
+                if not self._is_seller(offer, user):
+                    await self._callback_alert(callback, "Это предложение не для вас.")
+                    return
+                    if offer["status"] != OfferStatus.ACCEPTED.value:
+                        await self._callback_alert(
+                        callback, f"Статус сделки: {status_label(offer['status'])}."
+                        )
+                        return
+                        if not self.settings.payments_available:
+                            await self._callback_alert(
+                            callback,
+                            "Оплата Stars отключена. Настройте ADMIN_IDS, PAYMENTS_ENABLED "
+                            "и OPERATOR_PAYOUT_ACK в .env.",
+                            )
+                            return
 
-        await self._callback_done(callback, "Проверяю NFT…")
-        try:
-            proof = await self.gifts.verify_owner(user.id, offer["nft_slug"])
-        except GiftError as exc:
-            await self._user_or_group(
-                offer,
-                user.id,
-                f"Не удалось подтвердить сделку: {_esc(str(exc))}",
-                group_text=f"{self._seller_label(offer)}, не удалось подтвердить сделку: {_esc(str(exc))}",
-            )
-            return
+                            await self._callback_done(callback, "Проверяю NFT…")
+                            try:
+                                proof = await self.gifts.verify_owner(user.id, offer["nft_slug"])
+                            except GiftError as exc:
+                                await self._user_or_group(
+                                offer,
+                                user.id,
+                                f"Не удалось подтвердить сделку: {_esc(str(exc))}",
+                                group_text=f"{self._seller_label(offer)}, не удалось подтвердить сделку: {_esc(str(exc))}",
+                                )
+                                return
 
-        nonce = secrets.token_urlsafe(24)
-        payment_due_at = _now() + self.settings.payment_window_seconds
-        title = f"NFT #{offer['id']}"
-        description = (
-            f"Сделка #{offer['id']}. {offer['nft_title'][:80]}. "
-            f"{offer['amount']} Stars. Средства удерживаются ботом до подтверждения "
-            "получения NFT. Выплата продавцу выполняется оператором."
-        )[:255]
-        try:
-            invoice_url = await self.bot.create_invoice_link(
-                title=title,
-                description=description,
-                payload=f"offer:{offer['id']}:{nonce}",
-                currency="XTR",
-                prices=[
-                    LabeledPrice(
-                        label=f"NFT: {self._short_title(offer['nft_title'], 24)}",
-                        amount=int(offer["amount"]),
-                    )
-                ],
-                provider_token="",
-            )
-        except TelegramAPIError as exc:
-            logger.warning("Не удалось создать счёт для #%s: %s", offer["id"], exc.message)
-            await self._user_or_group(
-                offer,
-                user.id,
-                "Не удалось создать счёт Telegram Stars. Попробуйте позже.",
-                group_text=f"{self._seller_label(offer)}, не удалось создать счёт.",
-            )
-            return
+                                nonce = secrets.token_urlsafe(24)
+                                payment_due_at = _now() + self.settings.payment_window_seconds
+                                title = f"NFT #{offer['id']}"
+                                description = (
+                                f"Сделка #{offer['id']}. {offer['nft_title'][:80]}. "
+                                f"{offer['amount']} Stars. Средства удерживаются ботом до подтверждения "
+                                "получения NFT. Выплата продавцу выполняется оператором."
+                                )[:255]
+                                try:
+                                    invoice_url = await self.bot.create_invoice_link(
+                                    title=title,
+                                    description=description,
+                                    payload=f"offer:{offer['id']}:{nonce}",
+                                    currency="XTR",
+                                    prices=[
+                                    LabeledPrice(
+                                    label=f"NFT: {self._short_title(offer['nft_title'], 24)}",
+                                    amount=int(offer["amount"]),
+                                    )
+                                    ],
+                                    provider_token="",
+                                    )
+                                except TelegramAPIError as exc:
+                                    logger.warning("Не удалось создать счёт для #%s: %s", offer["id"], exc.message)
+                                    await self._user_or_group(
+                                    offer,
+                                    user.id,
+                                    "Не удалось создать счёт Telegram Stars. Попробуйте позже.",
+                                    group_text=f"{self._seller_label(offer)}, не удалось создать счёт.",
+                                    )
+                                    return
 
-        ok = await self.db.set_payment_pending(
-            offer["id"], nonce, invoice_url, payment_due_at
-        )
-        if not ok:
-            await self._notify_user(
-                user.id,
-                "Статус сделки уже изменился. Обновите карточку в группе.",
-            )
-            return
+                                    ok = await self.db.set_payment_pending(
+                                    offer["id"], nonce, invoice_url, payment_due_at
+                                    )
+                                    if not ok:
+                                        await self._notify_user(
+                                        user.id,
+                                        "Статус сделки уже изменился. Обновите карточку в группе.",
+                                        )
+                                        return
 
-        await self.db.update_offer(
-            offer["id"],
-            nft_owned_gift_id=proof.owned_gift_id,
-            nft_business_connection_id=proof.business_connection_id,
-            nft_transfer_mode=proof.transfer_mode,
-            nft_transfer_star_count=proof.transfer_star_count,
-        )
-        await self.db.add_event(offer["id"], user.id, "invoice_created", {"amount": offer["amount"]})
-        await self._refresh_card(offer["id"])
+                                        await self.db.update_offer(
+                                        offer["id"],
+                                        nft_owned_gift_id=proof.owned_gift_id,
+                                        nft_business_connection_id=proof.business_connection_id,
+                                        nft_transfer_mode=proof.transfer_mode,
+                                        nft_transfer_star_count=proof.transfer_star_count,
+                                        )
+                                        await self.db.add_event(offer["id"], user.id, "invoice_created", {"amount": offer["amount"]})
+                                        await self._refresh_card(offer["id"])
 
-        fresh = await self.db.get_offer(offer["id"])
-        assert fresh is not None
-        pay_text = (
-            f"<b>Счёт по сделке №{offer['id']}</b>\n"
-            f"NFT: {_esc(offer['nft_title'])}\n"
-            f"Сумма: <b>{offer['amount']} Stars</b>\n\n"
-            "Оплата проходит через официальный счёт Telegram Stars. "
-            "Stars удерживаются ботом до подтверждения получения NFT. "
-            "Выплата продавцу выполняется оператором вручную.\n\n"
-            f"Счёт действует до {self._fmt_dt(payment_due_at)}."
-        )
-        sent = await self._notify_user(
-            offer["buyer_id"],
-            pay_text,
-            keyboard=payment_keyboard(invoice_url, int(offer["amount"])),
-        )
-        await self._notify_user(
-            user.id,
-            f"Счёт по сделке №{offer['id']} создан. Ожидайте оплату покупателем.",
-        )
-        if not sent:
-            await self._notify_group(
-                fresh,
-                f"{self._buyer_label(offer)}, счёт по сделке №{offer['id']} "
-                f"на <b>{offer['amount']} Stars</b>.\n{pay_text}",
-                keyboard=payment_keyboard(invoice_url, int(offer["amount"])),
-            )
+                                        fresh = await self.db.get_offer(offer["id"])
+                                        assert fresh is not None
+                                        pay_text = (
+                                        f"<b>Счёт по сделке №{offer['id']}</b>\n"
+                                        f"NFT: {_esc(offer['nft_title'])}\n"
+                                        f"Сумма: <b>{offer['amount']} Stars</b>\n\n"
+                                        "Оплата проходит через официальный счёт Telegram Stars. "
+                                        "Stars удерживаются ботом до подтверждения получения NFT. "
+                                        "Выплата продавцу выполняется оператором вручную.\n\n"
+                                        f"Счёт действует до {self._fmt_dt(payment_due_at)}."
+                                        )
+                                        sent = await self._notify_user(
+                                        offer["buyer_id"],
+                                        pay_text,
+                                        keyboard=payment_keyboard(invoice_url, int(offer["amount"])),
+                                        )
+                                        await self._notify_user(
+                                        user.id,
+                                        f"Счёт по сделке №{offer['id']} создан. Ожидайте оплату покупателем.",
+                                        )
+                                        if not sent:
+                                            await self._notify_group(
+                                            fresh,
+                                            f"{self._buyer_label(offer)}, счёт по сделке №{offer['id']} "
+                                            f"на <b>{offer['amount']} Stars</b>.\n{pay_text}",
+                                            keyboard=payment_keyboard(invoice_url, int(offer["amount"])),
+                                            )
 
     async def on_reject(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
             return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        if not self._is_seller(offer, user):
-            await self._callback_alert(callback, "Это предложение не для вас.")
-            return
-        if offer["status"] != OfferStatus.PENDING.value:
-            await self._callback_alert(
-                callback, f"Статус сделки: {status_label(offer['status'])}."
-            )
-            return
-        if offer["expires_at"] <= _now():
-            await self.db.mark_expired(offer["id"])
-            await self._refresh_card(offer["id"])
-            await self._callback_alert(callback, "Срок действия предложения истёк.")
-            return
-        ok = await self.db.transition(
-            offer["id"],
-            {OfferStatus.PENDING.value},
-            OfferStatus.REJECTED.value,
-            require_unexpired=True,
-            closed_at=_now(),
-        )
-        if not ok:
-            if offer["expires_at"] <= _now():
-                await self.db.mark_expired(offer["id"])
-                await self._refresh_card(offer["id"])
-                await self._callback_alert(callback, "Срок действия предложения истёк.")
-            else:
-                await self._callback_alert(callback, "Предложение уже изменилось.")
-            return
-        await self.db.add_event(offer["id"], user.id, "rejected")
-        await self._refresh_card(offer["id"])
-        await self._notify_user(
-            offer["buyer_id"],
-            f"Продавец отклонил предложение №{offer['id']}.",
-        )
-        await self._callback_done(callback, "Предложение отклонено")
+            offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+            if offer is None:
+                await self._callback_alert(callback, "Сделка не найдена.")
+                return
+                user = callback.from_user
+                if not self._is_seller(offer, user):
+                    await self._callback_alert(callback, "Это предложение не для вас.")
+                    return
+                    if offer["status"] != OfferStatus.PENDING.value:
+                        await self._callback_alert(
+                        callback, f"Статус сделки: {status_label(offer['status'])}."
+                        )
+                        return
+                        if offer["expires_at"] <= _now():
+                            await self.db.mark_expired(offer["id"])
+                            await self._refresh_card(offer["id"])
+                            await self._callback_alert(callback, "Срок действия предложения истёк.")
+                            return
+                            ok = await self.db.transition(
+                            offer["id"],
+                            {OfferStatus.PENDING.value},
+                            OfferStatus.REJECTED.value,
+                            require_unexpired=True,
+                            closed_at=_now(),
+                            )
+                            if not ok:
+                                if offer["expires_at"] <= _now():
+                                    await self.db.mark_expired(offer["id"])
+                                    await self._refresh_card(offer["id"])
+                                    await self._callback_alert(callback, "Срок действия предложения истёк.")
+                                else:
+                                    await self._callback_alert(callback, "Предложение уже изменилось.")
+                                    return
+                                    await self.db.add_event(offer["id"], user.id, "rejected")
+                                    await self._refresh_card(offer["id"])
+                                    await self._notify_user(
+                                    offer["buyer_id"],
+                                    f"Продавец отклонил предложение №{offer['id']}.",
+                                    )
+                                    await self._callback_done(callback, "Предложение отклонено")
 
     async def on_cancel(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
             return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        is_buyer = offer["buyer_id"] == user.id
-        is_seller = self._is_seller(offer, user)
-        if not (is_buyer or is_seller):
-            await self._callback_alert(callback, "У вас нет доступа к этой сделке.")
-            return
-        allowed = {
-            OfferStatus.PENDING.value,
-            OfferStatus.ACCEPTED.value,
-            OfferStatus.AWAITING_PAYMENT.value,
-        }
-        if offer["status"] not in allowed:
-            await self._callback_alert(
-                callback,
-                f"Нельзя отменить из статуса «{status_label(offer['status'])}».",
-            )
-            return
-        if offer.get("paid_at"):
-            await self._callback_alert(
-                callback,
-                "Покупатель уже оплатил. Для возврата нужен оператор: /refund "
-                + str(offer["id"]),
-            )
-            return
-        if offer["status"] == OfferStatus.PENDING.value and offer["expires_at"] <= _now():
-            await self.db.mark_expired(offer["id"])
-            await self._refresh_card(offer["id"])
-            await self._callback_alert(callback, "Срок действия предложения истёк.")
-            return
-        ok = await self.db.mark_cancelled(
-            offer["id"],
-            allowed,
-            "Отменена в карточке",
-        )
-        if not ok:
-            await self._callback_alert(callback, "Статус уже изменился.")
-            return
-        await self.db.add_event(offer["id"], user.id, "cancelled", {"by": user.id})
-        await self._refresh_card(offer["id"])
-        other = offer["seller_id"] if is_buyer else offer["buyer_id"]
-        if other:
-            await self._notify_user(
-                other,
-                f"Сделка №{offer['id']} отменена.",
-            )
-        await self._callback_done(callback, "Сделка отменена")
+            offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+            if offer is None:
+                await self._callback_alert(callback, "Сделка не найдена.")
+                return
+                user = callback.from_user
+                is_buyer = offer["buyer_id"] == user.id
+                is_seller = self._is_seller(offer, user)
+                if not (is_buyer or is_seller):
+                    await self._callback_alert(callback, "У вас нет доступа к этой сделке.")
+                    return
+                    allowed = {
+                    OfferStatus.PENDING.value,
+                    OfferStatus.ACCEPTED.value,
+                    OfferStatus.AWAITING_PAYMENT.value,
+                    }
+                    if offer["status"] not in allowed:
+                        await self._callback_alert(
+                        callback,
+                        f"Нельзя отменить из статуса «{status_label(offer['status'])}».",
+                        )
+                        return
+                        if offer.get("paid_at"):
+                            await self._callback_alert(
+                            callback,
+                            "Покупатель уже оплатил. Для возврата нужен оператор: /refund "
+                            + str(offer["id"]),
+                            )
+                            return
+                            if offer["status"] == OfferStatus.PENDING.value and offer["expires_at"] <= _now():
+                                await self.db.mark_expired(offer["id"])
+                                await self._refresh_card(offer["id"])
+                                await self._callback_alert(callback, "Срок действия предложения истёк.")
+                                return
+                                ok = await self.db.mark_cancelled(
+                                offer["id"],
+                                allowed,
+                                "Отменена в карточке",
+                                )
+                                if not ok:
+                                    await self._callback_alert(callback, "Статус уже изменился.")
+                                    return
+                                    await self.db.add_event(offer["id"], user.id, "cancelled", {"by": user.id})
+                                    await self._refresh_card(offer["id"])
+                                    other = offer["seller_id"] if is_buyer else offer["buyer_id"]
+                                    if other:
+                                        await self._notify_user(
+                                        other,
+                                        f"Сделка №{offer['id']} отменена.",
+                                        )
+                                        await self._callback_done(callback, "Сделка отменена")
 
     async def on_seller_sent(self, callback: CallbackQuery) -> None:
-        if not await self._guard_callback(callback):
-            return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        if not self._is_seller(offer, user):
-            await self._callback_alert(callback, "Это не ваша сделка.")
-            return
-        if offer["status"] != OfferStatus.PAID.value:
-            await self._callback_alert(
-                callback, f"Статус сделки: {status_label(offer['status'])}."
-            )
-            return
+            if not await self._guard_callback(callback):
+                return
+                offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+                if offer is None:
+                    await self._callback_alert(callback, "Сделка не найдена.")
+                    return
+                    user = callback.from_user
+                    if not self._is_seller(offer, user):
+                        await self._callback_alert(callback, "Это не ваша сделка.")
+                        return
+                        if offer["status"] != OfferStatus.PAID.value:
+                            await self._callback_alert(
+                            callback, f"Статус сделки: {status_label(offer['status'])}."
+                            )
+                            return
 
-        await self._callback_done(callback, "Проверяю NFT у покупателя…")
-        verified = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
-        ok = await self.db.mark_nft_transferred(
-            offer["id"],
-            method="manual",
-            verified=verified,
-            verification_method="getUserGifts" if verified else None,
-        )
-        if not ok:
-            await self._notify_user(
-                user.id,
-                "Статус сделки уже изменился. Обновите карточку в группе.",
-            )
-            return
-        await self.db.add_event(
-            offer["id"],
-            user.id,
-            "nft_marked_sent",
-            {"verified": verified},
-        )
-        await self._refresh_card(offer["id"])
-        fresh = await self.db.get_offer(offer["id"])
-        assert fresh is not None
-        verify_text = (
-            " NFT найден в профиле покупателя."
-            if verified
-            else " Автоматическая проверка профиля покупателя недоступна — нужно подтверждение."
-        )
-        confirm_text = (
-            f"<b>NFT по сделке №{offer['id']} передан</b>\n"
-            f"Проверьте NFT и подтвердите получение.\n{verify_text}"
-        )
-        sent = await self._notify_user(
-            offer["buyer_id"],
-            confirm_text,
-            keyboard=buyer_confirm_keyboard(offer["id"]),
-        )
-        if not sent:
-            await self._notify_group(
-                fresh,
-                f"{self._buyer_label(offer)}, продавец отметил передачу NFT. "
-                f"Подтвердите получение.\n{verify_text}",
-                keyboard=buyer_confirm_keyboard(offer["id"]),
-            )
+                            await self._callback_done(callback, "Проверяю NFT у покупателя…")
+                            verified = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
+                            ok = await self.db.mark_nft_transferred(
+                            offer["id"],
+                            method="manual",
+                            verified=verified,
+                            verification_method="getUserGifts" if verified else None,
+                            )
+                            if not ok:
+                                await self._notify_user(
+                                user.id,
+                                "Статус сделки уже изменился. Обновите карточку в группе.",
+                                )
+                                return
+                                await self.db.add_event(
+                                offer["id"],
+                                user.id,
+                                "nft_marked_sent",
+                                {"verified": verified},
+                                )
+                                await self._refresh_card(offer["id"])
+                                fresh = await self.db.get_offer(offer["id"])
+                                assert fresh is not None
+                                verify_text = (
+                                " NFT найден в профиле покупателя."
+                                if verified
+                                else " Автоматическая проверка профиля покупателя недоступна — нужно подтверждение."
+                                )
+                                confirm_text = (
+                                f"<b>NFT по сделке №{offer['id']} передан</b>\n"
+                                f"Проверьте NFT и подтвердите получение.\n{verify_text}"
+                                )
+                                sent = await self._notify_user(
+                                offer["buyer_id"],
+                                confirm_text,
+                                keyboard=buyer_confirm_keyboard(offer["id"]),
+                                )
+                                if not sent:
+                                    await self._notify_group(
+                                    fresh,
+                                    f"{self._buyer_label(offer)}, продавец отметил передачу NFT. "
+                                    f"Подтвердите получение.\n{verify_text}",
+                                    keyboard=buyer_confirm_keyboard(offer["id"]),
+                                    )
 
     async def on_buyer_confirm(self, callback: CallbackQuery) -> None:
-        if not await self._guard_callback(callback):
-            return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        if user.id != offer["buyer_id"]:
-            await self._callback_alert(callback, "Подтвердить получение может только покупатель.")
-            return
-        if offer["status"] != OfferStatus.NFT_TRANSFERRED.value:
-            await self._callback_alert(
-                callback, f"Статус сделки: {status_label(offer['status'])}."
-            )
-            return
-        ok = await self.db.mark_payout_pending(offer["id"])
-        if not ok:
-            await self._callback_alert(callback, "Статус уже изменился.")
-            return
-        await self.db.add_event(offer["id"], user.id, "buyer_confirmed")
-        await self._refresh_card(offer["id"])
-        fresh = await self.db.get_offer(offer["id"])
-        assert fresh is not None
-        await self._notify_user(
-            user.id,
-            f"Получение NFT по сделке №{offer['id']} подтверждено. "
-            "Выплата продавцу будет отмечена оператором.",
-        )
-        if offer.get("seller_id"):
-            await self._notify_user(
-                offer["seller_id"],
-                f"Покупатель подтвердил получение NFT по сделке №{offer['id']}. "
-                f"К выплате: {offer['amount']} Stars. Выплата выполняется оператором.",
-            )
-        await self._notify_group(
-            fresh,
-            f"Покупатель подтвердил получение NFT по сделке №{offer['id']}. "
-            "Ожидается выплата продавцу оператором.",
-        )
-        await self._alert_admins(
-            f"<b>Сделка №{offer['id']} готова к выплате</b>\n"
-            f"Продавец: {self._seller_label(offer)}\n"
-            f"Сумма: <b>{offer['amount']} Stars</b>\n"
-            f"NFT: {self._nft_link(offer)}\n\n"
-            f"Выполните внешнюю выплату и отметьте её:\n"
-            f"<code>/payout {offer['id']} ССЫЛКА_ИЛИ_НОМЕР</code>"
-        )
-        await self._callback_done(callback, "Получение подтверждено")
+            if not await self._guard_callback(callback):
+                return
+                offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+                if offer is None:
+                    await self._callback_alert(callback, "Сделка не найдена.")
+                    return
+                    user = callback.from_user
+                    if user.id != offer["buyer_id"]:
+                        await self._callback_alert(callback, "Подтвердить получение может только покупатель.")
+                        return
+                        if offer["status"] != OfferStatus.NFT_TRANSFERRED.value:
+                            await self._callback_alert(
+                            callback, f"Статус сделки: {status_label(offer['status'])}."
+                            )
+                            return
+                            ok = await self.db.mark_payout_pending(offer["id"])
+                            if not ok:
+                                await self._callback_alert(callback, "Статус уже изменился.")
+                                return
+                                await self.db.add_event(offer["id"], user.id, "buyer_confirmed")
+                                await self._refresh_card(offer["id"])
+                                fresh = await self.db.get_offer(offer["id"])
+                                assert fresh is not None
+                                await self._notify_user(
+                                user.id,
+                                f"Получение NFT по сделке №{offer['id']} подтверждено. "
+                                "Выплата продавцу будет отмечена оператором.",
+                                )
+                                if offer.get("seller_id"):
+                                    await self._notify_user(
+                                    offer["seller_id"],
+                                    f"Покупатель подтвердил получение NFT по сделке №{offer['id']}. "
+                                    f"К выплате: {offer['amount']} Stars. Выплата выполняется оператором.",
+                                    )
+                                    await self._notify_group(
+                                    fresh,
+                                    f"Покупатель подтвердил получение NFT по сделке №{offer['id']}. "
+                                    "Ожидается выплата продавцу оператором.",
+                                    )
+                                    await self._alert_admins(
+                                    f"<b>Сделка №{offer['id']} готова к выплате</b>\n"
+                                    f"Продавец: {self._seller_label(offer)}\n"
+                                    f"Сумма: <b>{offer['amount']} Stars</b>\n"
+                                    f"NFT: {self._nft_link(offer)}\n\n"
+                                    f"Выполните внешнюю выплату и отметьте её:\n"
+                                    f"<code>/payout {offer['id']} ССЫЛКА_ИЛИ_НОМЕР</code>"
+                                    )
+                                    await self._callback_done(callback, "Получение подтверждено")
 
     async def on_send_nft(self, callback: CallbackQuery) -> None:
-        if not await self._guard_callback(callback):
-            return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "?????? ?? ???????.")
-            return
-        await callback.answer(
-            "??????? NFT @GiftIinkGaurantBot", show_alert=True
-        )
+            if not await self._guard_callback(callback):
+                return
+                offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+                if offer is None:
+                    await self._callback_alert(callback, "?????? ?? ???????.")
+                    return
+                    await callback.answer(
+                    "??????? NFT @GiftIinkGaurantBot", show_alert=True
+                    )
 
     async def on_transferred(self, callback: CallbackQuery) -> None:
-        if not await self._guard_callback(callback):
-            return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "?????? ?? ???????.")
-            return
-        await self._callback_done(callback, "????????")
+            if not await self._guard_callback(callback):
+                return
+                offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+                if offer is None:
+                    await self._callback_alert(callback, "?????? ?? ???????.")
+                    return
+                    await self._callback_done(callback, "????????")
 
     async def on_dispute(self, callback: CallbackQuery) -> None:
         if not await self._guard_callback(callback):
             return
-        offer = await self.db.get_offer(int(callback.data.split(":")[1]))
-        if offer is None:
-            await self._callback_alert(callback, "Сделка не найдена.")
-            return
-        user = callback.from_user
-        is_admin = await self.is_payment_admin(user.id)
-        participant = (
-            user.id == offer["buyer_id"]
-            or user.id == offer.get("seller_id")
-            or is_admin
-        )
-        if not participant:
-            await self._callback_alert(callback, "У вас нет доступа к этой сделке.")
-            return
-        if offer["status"] not in {
-            OfferStatus.PAID.value,
-            OfferStatus.TRANSFERRING.value,
-            OfferStatus.NFT_TRANSFERRED.value,
-            OfferStatus.PAYOUT_PENDING.value,
-            OfferStatus.DISPUTED.value,
-        }:
-            await self._callback_alert(
-                callback, f"Нельзя открыть спор из статуса «{status_label(offer['status'])}»."
-            )
-            return
-        if offer["status"] == OfferStatus.DISPUTED.value:
-            await self._callback_done(callback, "Спор уже открыт")
-            return
-        ok = await self.db.mark_disputed(offer["id"])
-        if not ok:
-            await self._callback_alert(callback, "Статус уже изменился.")
-            return
-        await self.db.add_event(offer["id"], user.id, "dispute_opened")
-        await self._refresh_card(offer["id"])
-        fresh = await self.db.get_offer(offer["id"])
-        assert fresh is not None
-        await self._notify_group(
-            fresh,
-            f"По сделке №{offer['id']} открыт спор. Оператор уведомлён.",
-        )
-        await self._alert_admins(
-            f"<b>Спор по сделке №{offer['id']}</b>\n"
-            f"Покупатель: {self._buyer_label(offer)}\n"
-            f"Продавец: {self._seller_label(offer)}\n"
-            f"Сумма: {offer['amount']} Stars\n"
-            f"Статус: {status_label(fresh['status'])}\n"
-            f"NFT: {self._nft_link(offer)}"
-        )
-        await self._callback_done(callback, "Оператор уведомлён")
+            offer = await self.db.get_offer(int(callback.data.split(":")[1]))
+            if offer is None:
+                await self._callback_alert(callback, "Сделка не найдена.")
+                return
+                user = callback.from_user
+                is_admin = await self.is_payment_admin(user.id)
+                participant = (
+                user.id == offer["buyer_id"]
+                or user.id == offer.get("seller_id")
+                or is_admin
+                )
+                if not participant:
+                    await self._callback_alert(callback, "У вас нет доступа к этой сделке.")
+                    return
+                    if offer["status"] not in {
+                    OfferStatus.PAID.value,
+                    OfferStatus.TRANSFERRING.value,
+                    OfferStatus.NFT_TRANSFERRED.value,
+                    OfferStatus.PAYOUT_PENDING.value,
+                    OfferStatus.DISPUTED.value,
+                    }:
+                        await self._callback_alert(
+                        callback, f"Нельзя открыть спор из статуса «{status_label(offer['status'])}»."
+                        )
+                        return
+                        if offer["status"] == OfferStatus.DISPUTED.value:
+                            await self._callback_done(callback, "Спор уже открыт")
+                            return
+                            ok = await self.db.mark_disputed(offer["id"])
+                            if not ok:
+                                await self._callback_alert(callback, "Статус уже изменился.")
+                                return
+                                await self.db.add_event(offer["id"], user.id, "dispute_opened")
+                                await self._refresh_card(offer["id"])
+                                fresh = await self.db.get_offer(offer["id"])
+                                assert fresh is not None
+                                await self._notify_group(
+                                fresh,
+                                f"По сделке №{offer['id']} открыт спор. Оператор уведомлён.",
+                                )
+                                await self._alert_admins(
+                                f"<b>Спор по сделке №{offer['id']}</b>\n"
+                                f"Покупатель: {self._buyer_label(offer)}\n"
+                                f"Продавец: {self._seller_label(offer)}\n"
+                                f"Сумма: {offer['amount']} Stars\n"
+                                f"Статус: {status_label(fresh['status'])}\n"
+                                f"NFT: {self._nft_link(offer)}"
+                                )
+                                await self._callback_done(callback, "Оператор уведомлён")
 
-    # -------------------------------------------------------------- payments
+                                # -------------------------------------------------------------- payments
 
     async def handle_pre_checkout(self, query: PreCheckoutQuery) -> tuple[bool, str | None]:
-        payload = query.invoice_payload or ""
-        parts = payload.split(":")
-        if len(parts) != 3 or parts[0] != "offer":
-            return False, "Некорректный счёт."
-        try:
-            offer_id = int(parts[1])
-        except ValueError:
-            return False, "Некорректный счёт."
-        nonce = parts[2]
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            return False, "Сделка не найдена."
-        if offer["buyer_id"] != query.from_user.id:
-            return False, "Этот счёт предназначен другому покупателю."
-        if offer["status"] != OfferStatus.AWAITING_PAYMENT.value:
-            return False, "Счёт больше не активен."
-        if offer.get("payment_nonce") != nonce:
-            return False, "Счёт устарел."
-        if offer.get("payment_due_at") and offer["payment_due_at"] <= _now():
-            return False, "Срок действия счёта истёк."
-        if query.currency != "XTR":
-            return False, "Ожидается оплата в Telegram Stars."
-        if query.total_amount != int(offer["amount"]):
-            return False, "Сумма счёта не совпадает."
-        return True, None
+            payload = query.invoice_payload or ""
+            parts = payload.split(":")
+            if len(parts) != 3 or parts[0] != "offer":
+                return False, "Некорректный счёт."
+                try:
+                    offer_id = int(parts[1])
+                except ValueError:
+                    return False, "Некорректный счёт."
+                    nonce = parts[2]
+                    offer = await self.db.get_offer(offer_id)
+                    if offer is None:
+                        return False, "Сделка не найдена."
+                        if offer["buyer_id"] != query.from_user.id:
+                            return False, "Этот счёт предназначен другому покупателю."
+                            if offer["status"] != OfferStatus.AWAITING_PAYMENT.value:
+                                return False, "Счёт больше не активен."
+                                if offer.get("payment_nonce") != nonce:
+                                    return False, "Счёт устарел."
+                                    if offer.get("payment_due_at") and offer["payment_due_at"] <= _now():
+                                        return False, "Срок действия счёта истёк."
+                                        if query.currency != "XTR":
+                                            return False, "Ожидается оплата в Telegram Stars."
+                                            if query.total_amount != int(offer["amount"]):
+                                                return False, "Сумма счёта не совпадает."
+                                                return True, None
 
     async def _alert_admins(self, text: str) -> None:
-        admin_ids: set[int] = set(self.settings.admin_ids)
-        try:
-            admin_ids.update(await self.db.list_staff_ids())
-        except Exception:
-            pass
-        for admin_id in admin_ids:
-            await self._notify_user(admin_id, text)
+            admin_ids: set[int] = set(self.settings.admin_ids)
+            try:
+                admin_ids.update(await self.db.list_staff_ids())
+            except Exception:
+                pass
+                for admin_id in admin_ids:
+                    await self._notify_user(admin_id, text)
 
     async def _refund_charge(
         self,
@@ -1386,653 +1388,653 @@ class DealService:
         amount: int | None,
         offer_id: int | None,
         reason: str,
-    ) -> bool:
+        ) -> bool:
         claimed = await self.db.claim_refund(
-            charge_id=charge_id,
-            offer_id=offer_id,
-            user_id=user_id,
-            amount=amount,
-            reason=reason,
+        charge_id=charge_id,
+        offer_id=offer_id,
+        user_id=user_id,
+        amount=amount,
+        reason=reason,
         )
         if not claimed:
             logger.info("Возврат по charge %s уже выполнялся", charge_id)
             return True
 
-        try:
-            await self.bot.refund_star_payment(
+            try:
+                await self.bot.refund_star_payment(
                 user_id=user_id,
                 telegram_payment_charge_id=charge_id,
-            )
-        except TelegramAPIError as exc:
-            await self.db.release_refund(charge_id)
-            logger.error("Не удалось вернуть оплату %s: %s", charge_id, exc.message)
-            await self._alert_admins(
+                )
+            except TelegramAPIError as exc:
+                await self.db.release_refund(charge_id)
+                logger.error("Не удалось вернуть оплату %s: %s", charge_id, exc.message)
+                await self._alert_admins(
                 "<b>Критично:</b> не удалось вернуть Stars.\n"
                 f"Пользователь: <code>{user_id}</code>\n"
                 f"Charge: <code>{_esc(charge_id)}</code>\n"
                 f"Причина: {_esc(reason)}\n"
                 f"Ошибка: {_esc(exc.message)}"
-            )
-            return False
+                )
+                return False
 
-        if offer_id is not None:
-            await self.db.add_event(
-                offer_id,
-                self.bot.id,
-                "payment_refunded",
-                {"charge_id": charge_id, "reason": reason},
-            )
-        suffix = f" по сделке №{offer_id}" if offer_id is not None else ""
-        await self._notify_user(
-            user_id,
-            f"<b>Оплата{suffix} возвращена</b>\n"
-            f"Сумма: {amount if amount is not None else '—'} Stars\n"
-            f"{_esc(reason)}",
-        )
-        return True
+                if offer_id is not None:
+                    await self.db.add_event(
+                    offer_id,
+                    self.bot.id,
+                    "payment_refunded",
+                    {"charge_id": charge_id, "reason": reason},
+                    )
+                    suffix = f" по сделке №{offer_id}" if offer_id is not None else ""
+                    await self._notify_user(
+                    user_id,
+                    f"<b>Оплата{suffix} возвращена</b>\n"
+                    f"Сумма: {amount if amount is not None else '—'} Stars\n"
+                    f"{_esc(reason)}",
+                    )
+                    return True
 
     async def handle_successful_payment(self, message: Message) -> None:
-        payment = message.successful_payment
-        if payment is None or message.from_user is None:
-            return
-
-        payer_id = message.from_user.id
-        charge_id = payment.telegram_payment_charge_id
-        paid_amount = int(payment.total_amount)
-        parts = (payment.invoice_payload or "").split(":")
-        if len(parts) != 3 or parts[0] != "offer":
-            logger.warning("Неизвестный payload оплаты")
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=None,
-                reason="Некорректный счёт. Stars возвращены автоматически.",
-            )
-            return
-
-        try:
-            offer_id = int(parts[1])
-        except ValueError:
-            logger.warning("Некорректный offer_id в payload")
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=None,
-                reason="Некорректный счёт. Stars возвращены автоматически.",
-            )
-            return
-
-        nonce = parts[2]
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            logger.warning("Оплата по неизвестной сделке #%s", offer_id)
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=None,
-                reason="Сделка не найдена. Stars возвращены автоматически.",
-            )
-            return
-
-        if payment.currency != "XTR":
-            logger.warning("Оплата #%s в валюте %s", offer_id, payment.currency)
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=offer_id,
-                reason="Неверная валюта счёта. Stars возвращены автоматически.",
-            )
-            return
-
-        if payer_id != offer["buyer_id"]:
-            logger.warning("Оплата #%s от неверного пользователя", offer_id)
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=offer_id,
-                reason="Счёт предназначен другому покупателю. Stars возвращены автоматически.",
-            )
-            return
-
-        if paid_amount != int(offer["amount"]):
-            logger.warning(
-                "Оплата #%s на сумму %s вместо %s",
-                offer_id,
-                paid_amount,
-                offer["amount"],
-            )
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=offer_id,
-                reason="Сумма оплаты не совпала со счётом. Stars возвращены автоматически.",
-            )
-            return
-
-        try:
-            ok = await self.db.mark_paid(
-                offer_id=offer_id,
-                buyer_id=payer_id,
-                amount=int(offer["amount"]),
-                nonce=nonce,
-                charge_id=charge_id,
-                provider_charge_id=payment.provider_payment_charge_id,
-                paid_amount=paid_amount,
-            )
-        except IntegrityError:
-            logger.error(
-                "Конфликт активных сделок при оплате #%s; оплата будет возвращена",
-                offer_id,
-            )
-            ok = False
-        if not ok:
-            if await self.db.charge_exists(charge_id):
-                logger.info("Повторное уведомление об оплате по сделке #%s", offer_id)
+            payment = message.successful_payment
+            if payment is None or message.from_user is None:
                 return
-            logger.warning("Оплата по сделке #%s не зачтена, возвращаю Stars", offer_id)
-            await self._refund_charge(
-                user_id=payer_id,
-                charge_id=charge_id,
-                amount=paid_amount,
-                offer_id=offer_id,
-                reason=(
-                    "Оплата не была зачтена: счёт устарел или сделка уже "
-                    "изменилась. Stars возвращены автоматически."
-                ),
-            )
-            return
 
-        await self.db.add_event(
-            offer_id,
-            message.from_user.id,
-            "payment_received",
-            {
-                "amount": payment.total_amount,
-                "charge_id": payment.telegram_payment_charge_id,
-            },
-        )
-        await self._refresh_card(offer_id)
-        offer = await self.db.get_offer(offer_id)
-        assert offer is not None
+                payer_id = message.from_user.id
+                charge_id = payment.telegram_payment_charge_id
+                paid_amount = int(payment.total_amount)
+                parts = (payment.invoice_payload or "").split(":")
+                if len(parts) != 3 or parts[0] != "offer":
+                    logger.warning("Неизвестный payload оплаты")
+                    await self._refund_charge(
+                    user_id=payer_id,
+                    charge_id=charge_id,
+                    amount=paid_amount,
+                    offer_id=None,
+                    reason="Некорректный счёт. Stars возвращены автоматически.",
+                    )
+                    return
 
-        await self._notify_user(
-            offer["buyer_id"],
-            f"<b>Оплата по сделке №{offer_id} получена</b>\n"
-            f"{offer['amount']} Stars удерживаются ботом до подтверждения получения NFT.",
-        )
-        await self._alert_admins(
-            f"<b>Оплата по сделке №{offer_id}</b>\n"
-            f"Сумма: {offer['amount']} Stars\n"
-            f"Покупатель: {self._buyer_label(offer)}\n"
-            f"Продавец: {self._seller_label(offer)}\n"
-            f"Статус: {status_label(offer['status'])}"
-        )
+                    try:
+                        offer_id = int(parts[1])
+                    except ValueError:
+                        logger.warning("Некорректный offer_id в payload")
+                        await self._refund_charge(
+                        user_id=payer_id,
+                        charge_id=charge_id,
+                        amount=paid_amount,
+                        offer_id=None,
+                        reason="Некорректный счёт. Stars возвращены автоматически.",
+                        )
+                        return
 
-        auto_transfer = bool(
-            self.settings.business_auto_transfer
-            and offer.get("nft_transfer_mode") == "business"
-            and offer.get("nft_business_connection_id")
-            and offer.get("nft_owned_gift_id")
-        )
-        if auto_transfer:
-            await self._try_auto_transfer(offer)
-        else:
-            seller_notice = (
-                f"<b>Покупатель оплатил сделку №{offer_id}</b>\n"
-                f"Получено: {offer['amount']} Stars.\n"
-                "Передайте NFT покупателю. Если передали — нажмите кнопку."
-            )
-            seller_id = offer.get("seller_id")
-            sent = await self._notify_user(
-                seller_id,
-                seller_notice,
-                keyboard=seller_paid_keyboard(offer_id),
-            ) if seller_id else False
-            if not sent:
-                await self._notify_group(
-                    offer,
-                    f"{self._seller_label(offer)}, покупатель оплатил сделку №{offer_id}. "
-                    "Передайте NFT покупателю.",
-                    keyboard=seller_paid_keyboard(offer_id),
-                )
-            await self._notify_user(
-                offer["buyer_id"],
-                "Ожидайте передачу NFT продавцом. После передачи подтвердите получение.",
-            )
+                        nonce = parts[2]
+                        offer = await self.db.get_offer(offer_id)
+                        if offer is None:
+                            logger.warning("Оплата по неизвестной сделке #%s", offer_id)
+                            await self._refund_charge(
+                            user_id=payer_id,
+                            charge_id=charge_id,
+                            amount=paid_amount,
+                            offer_id=None,
+                            reason="Сделка не найдена. Stars возвращены автоматически.",
+                            )
+                            return
+
+                            if payment.currency != "XTR":
+                                logger.warning("Оплата #%s в валюте %s", offer_id, payment.currency)
+                                await self._refund_charge(
+                                user_id=payer_id,
+                                charge_id=charge_id,
+                                amount=paid_amount,
+                                offer_id=offer_id,
+                                reason="Неверная валюта счёта. Stars возвращены автоматически.",
+                                )
+                                return
+
+                                if payer_id != offer["buyer_id"]:
+                                    logger.warning("Оплата #%s от неверного пользователя", offer_id)
+                                    await self._refund_charge(
+                                    user_id=payer_id,
+                                    charge_id=charge_id,
+                                    amount=paid_amount,
+                                    offer_id=offer_id,
+                                    reason="Счёт предназначен другому покупателю. Stars возвращены автоматически.",
+                                    )
+                                    return
+
+                                    if paid_amount != int(offer["amount"]):
+                                        logger.warning(
+                                        "Оплата #%s на сумму %s вместо %s",
+                                        offer_id,
+                                        paid_amount,
+                                        offer["amount"],
+                                        )
+                                        await self._refund_charge(
+                                        user_id=payer_id,
+                                        charge_id=charge_id,
+                                        amount=paid_amount,
+                                        offer_id=offer_id,
+                                        reason="Сумма оплаты не совпала со счётом. Stars возвращены автоматически.",
+                                        )
+                                        return
+
+                                        try:
+                                            ok = await self.db.mark_paid(
+                                            offer_id=offer_id,
+                                            buyer_id=payer_id,
+                                            amount=int(offer["amount"]),
+                                            nonce=nonce,
+                                            charge_id=charge_id,
+                                            provider_charge_id=payment.provider_payment_charge_id,
+                                            paid_amount=paid_amount,
+                                            )
+                                        except IntegrityError:
+                                            logger.error(
+                                            "Конфликт активных сделок при оплате #%s; оплата будет возвращена",
+                                            offer_id,
+                                            )
+                                            ok = False
+                                            if not ok:
+                                                if await self.db.charge_exists(charge_id):
+                                                    logger.info("Повторное уведомление об оплате по сделке #%s", offer_id)
+                                                    return
+                                                    logger.warning("Оплата по сделке #%s не зачтена, возвращаю Stars", offer_id)
+                                                    await self._refund_charge(
+                                                    user_id=payer_id,
+                                                    charge_id=charge_id,
+                                                    amount=paid_amount,
+                                                    offer_id=offer_id,
+                                                    reason=(
+                                                    "Оплата не была зачтена: счёт устарел или сделка уже "
+                                                    "изменилась. Stars возвращены автоматически."
+                                                    ),
+                                                    )
+                                                    return
+
+                                                    await self.db.add_event(
+                                                    offer_id,
+                                                    message.from_user.id,
+                                                    "payment_received",
+                                                    {
+                                                    "amount": payment.total_amount,
+                                                    "charge_id": payment.telegram_payment_charge_id,
+                                                    },
+                                                    )
+                                                    await self._refresh_card(offer_id)
+                                                    offer = await self.db.get_offer(offer_id)
+                                                    assert offer is not None
+
+                                                    await self._notify_user(
+                                                    offer["buyer_id"],
+                                                    f"<b>Оплата по сделке №{offer_id} получена</b>\n"
+                                                    f"{offer['amount']} Stars удерживаются ботом до подтверждения получения NFT.",
+                                                    )
+                                                    await self._alert_admins(
+                                                    f"<b>Оплата по сделке №{offer_id}</b>\n"
+                                                    f"Сумма: {offer['amount']} Stars\n"
+                                                    f"Покупатель: {self._buyer_label(offer)}\n"
+                                                    f"Продавец: {self._seller_label(offer)}\n"
+                                                    f"Статус: {status_label(offer['status'])}"
+                                                    )
+
+                                                    auto_transfer = bool(
+                                                    self.settings.business_auto_transfer
+                                                    and offer.get("nft_transfer_mode") == "business"
+                                                    and offer.get("nft_business_connection_id")
+                                                    and offer.get("nft_owned_gift_id")
+                                                    )
+                                                    if auto_transfer:
+                                                        await self._try_auto_transfer(offer)
+                                                    else:
+                                                        seller_notice = (
+                                                        f"<b>Покупатель оплатил сделку №{offer_id}</b>\n"
+                                                        f"Получено: {offer['amount']} Stars.\n"
+                                                        "Передайте NFT покупателю. Если передали — нажмите кнопку."
+                                                        )
+                                                        seller_id = offer.get("seller_id")
+                                                        sent = await self._notify_user(
+                                                        seller_id,
+                                                        seller_notice,
+                                                        keyboard=seller_paid_keyboard(offer_id),
+                                                        ) if seller_id else False
+                                                        if not sent:
+                                                            await self._notify_group(
+                                                            offer,
+                                                            f"{self._seller_label(offer)}, покупатель оплатил сделку №{offer_id}. "
+                                                            "Передайте NFT покупателю.",
+                                                            keyboard=seller_paid_keyboard(offer_id),
+                                                            )
+                                                            await self._notify_user(
+                                                            offer["buyer_id"],
+                                                            "Ожидайте передачу NFT продавцом. После передачи подтвердите получение.",
+                                                            )
 
     async def _try_auto_transfer(self, offer: dict[str, Any]) -> None:
-        seller_id = offer.get("seller_id")
-        if not seller_id:
-            return
-        started = await self.db.transition(
-            offer["id"],
-            {OfferStatus.PAID.value},
-            OfferStatus.TRANSFERRING.value,
-        )
-        if not started:
-            return
-        await self.db.add_event(offer["id"], self.bot.id, "auto_transfer_started")
-        await self._refresh_card(offer["id"])
-
-        try:
-            proof = await self.gifts.verify_owner(seller_id, offer["nft_slug"])
-            if not proof.can_auto_transfer:
-                raise GiftError("автопередача недоступна")
-            transfer_id = await self.gifts.transfer_to_buyer(
-                seller_id=seller_id,
-                buyer_id=offer["buyer_id"],
-                proof=proof,
-            )
-            verified = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
-            ok = await self.db.mark_nft_transferred(
-                offer["id"],
-                method="business",
-                transfer_id=transfer_id,
-                verified=verified,
-                verification_method="getUserGifts" if verified else None,
-            )
-            if not ok:
-                logger.error("NFT передан, но статус #%s не обновился", offer["id"])
+            seller_id = offer.get("seller_id")
+            if not seller_id:
                 return
-            await self.db.add_event(
+                started = await self.db.transition(
                 offer["id"],
-                self.bot.id,
-                "auto_transfer_completed",
-                {"transfer_id": transfer_id, "verified": verified},
-            )
-            await self._refresh_card(offer["id"])
-            fresh = await self.db.get_offer(offer["id"])
-            assert fresh is not None
-            text = (
-                f"<b>NFT по сделке №{offer['id']} передан автоматически</b>\n"
-                + (
-                    "NFT найден в профиле покупателя. Подтвердите получение."
-                    if verified
-                    else "Проверьте NFT и подтвердите получение."
+                {OfferStatus.PAID.value},
+                OfferStatus.TRANSFERRING.value,
                 )
-            )
-            sent = await self._notify_user(
-                offer["buyer_id"],
-                text,
-                keyboard=buyer_confirm_keyboard(offer["id"]),
-            )
-            if not sent:
-                await self._notify_group(
-                    fresh,
-                    f"{self._buyer_label(offer)}, NFT передан автоматически. "
-                    "Подтвердите получение.",
-                    keyboard=buyer_confirm_keyboard(offer["id"]),
-                )
-            await self._notify_user(
-                seller_id,
-                f"NFT по сделке №{offer['id']} передан покупателю автоматически. "
-                "Ожидается подтверждение получения.",
-            )
-        except (GiftError, TelegramAPIError) as exc:
-            message = str(exc) or "передача не выполнена"
-            logger.warning("Автопередача #%s не удалась: %s", offer["id"], message)
-            await self.db.transition(
-                offer["id"],
-                {OfferStatus.TRANSFERRING.value},
-                OfferStatus.PAID.value,
-                nft_transfer_error=message[:500],
-            )
-            await self._refresh_card(offer["id"])
-            fresh = await self.db.get_offer(offer["id"])
-            assert fresh is not None
-            await self._notify_user(
-                seller_id,
-                f"Автоматическая передача NFT по сделке №{offer['id']} не удалась: "
-                f"{_esc(message)}. Передайте NFT вручную и нажмите «Я передал NFT».",
-                keyboard=seller_paid_keyboard(offer["id"]),
-            )
-            await self._notify_group(
-                fresh,
-                f"{self._seller_label(offer)}, автопередача не удалась. "
-                "Передайте NFT вручную.",
-                keyboard=seller_paid_keyboard(offer["id"]),
-            )
-            for admin_id in self.settings.admin_ids:
-                await self._notify_user(
-                    admin_id,
-                    f"Автопередача по сделке #{offer['id']} не удалась: {_esc(message)}",
-                )
+                if not started:
+                    return
+                    await self.db.add_event(offer["id"], self.bot.id, "auto_transfer_started")
+                    await self._refresh_card(offer["id"])
 
-    # --------------------------------------------------------------- admin
+                    try:
+                        proof = await self.gifts.verify_owner(seller_id, offer["nft_slug"])
+                        if not proof.can_auto_transfer:
+                            raise GiftError("автопередача недоступна")
+                            transfer_id = await self.gifts.transfer_to_buyer(
+                            seller_id=seller_id,
+                            buyer_id=offer["buyer_id"],
+                            proof=proof,
+                            )
+                            verified = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
+                            ok = await self.db.mark_nft_transferred(
+                            offer["id"],
+                            method="business",
+                            transfer_id=transfer_id,
+                            verified=verified,
+                            verification_method="getUserGifts" if verified else None,
+                            )
+                            if not ok:
+                                logger.error("NFT передан, но статус #%s не обновился", offer["id"])
+                                return
+                                await self.db.add_event(
+                                offer["id"],
+                                self.bot.id,
+                                "auto_transfer_completed",
+                                {"transfer_id": transfer_id, "verified": verified},
+                                )
+                                await self._refresh_card(offer["id"])
+                                fresh = await self.db.get_offer(offer["id"])
+                                assert fresh is not None
+                                text = (
+                                f"<b>NFT по сделке №{offer['id']} передан автоматически</b>\n"
+                                + (
+                                "NFT найден в профиле покупателя. Подтвердите получение."
+                                if verified
+                                else "Проверьте NFT и подтвердите получение."
+                                )
+                                )
+                                sent = await self._notify_user(
+                                offer["buyer_id"],
+                                text,
+                                keyboard=buyer_confirm_keyboard(offer["id"]),
+                                )
+                                if not sent:
+                                    await self._notify_group(
+                                    fresh,
+                                    f"{self._buyer_label(offer)}, NFT передан автоматически. "
+                                    "Подтвердите получение.",
+                                    keyboard=buyer_confirm_keyboard(offer["id"]),
+                                    )
+                                    await self._notify_user(
+                                    seller_id,
+                                    f"NFT по сделке №{offer['id']} передан покупателю автоматически. "
+                                    "Ожидается подтверждение получения.",
+                                    )
+                    except (GiftError, TelegramAPIError) as exc:
+                                    message = str(exc) or "передача не выполнена"
+                                    logger.warning("Автопередача #%s не удалась: %s", offer["id"], message)
+                                    await self.db.transition(
+                                    offer["id"],
+                                    {OfferStatus.TRANSFERRING.value},
+                                    OfferStatus.PAID.value,
+                                    nft_transfer_error=message[:500],
+                                    )
+                                    await self._refresh_card(offer["id"])
+                                    fresh = await self.db.get_offer(offer["id"])
+                                    assert fresh is not None
+                                    await self._notify_user(
+                                    seller_id,
+                                    f"Автоматическая передача NFT по сделке №{offer['id']} не удалась: "
+                                    f"{_esc(message)}. Передайте NFT вручную и нажмите «Я передал NFT».",
+                                    keyboard=seller_paid_keyboard(offer["id"]),
+                                    )
+                                    await self._notify_group(
+                                    fresh,
+                                    f"{self._seller_label(offer)}, автопередача не удалась. "
+                                    "Передайте NFT вручную.",
+                                    keyboard=seller_paid_keyboard(offer["id"]),
+                                    )
+                                    for admin_id in self.settings.admin_ids:
+                                        await self._notify_user(
+                                        admin_id,
+                                        f"Автопередача по сделке #{offer['id']} не удалась: {_esc(message)}",
+                                        )
+
+                                        # --------------------------------------------------------------- admin
 
     async def refund(self, offer_id: int, admin_id: int) -> str:
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            return "Сделка не найдена."
-        if not offer.get("payment_charge_id"):
-            return "По сделке нет подтверждённой оплаты."
-        if offer["status"] in {
-            OfferStatus.COMPLETED.value,
-            OfferStatus.REFUNDED.value,
-            OfferStatus.CANCELLED.value,
-            OfferStatus.REJECTED.value,
-            OfferStatus.EXPIRED.value,
-        }:
-            return f"Возврат невозможен из статуса «{status_label(offer['status'])}»."
+            offer = await self.db.get_offer(offer_id)
+            if offer is None:
+                return "Сделка не найдена."
+                if not offer.get("payment_charge_id"):
+                    return "По сделке нет подтверждённой оплаты."
+                    if offer["status"] in {
+                    OfferStatus.COMPLETED.value,
+                    OfferStatus.REFUNDED.value,
+                    OfferStatus.CANCELLED.value,
+                    OfferStatus.REJECTED.value,
+                    OfferStatus.EXPIRED.value,
+                    }:
+                        return f"Возврат невозможен из статуса «{status_label(offer['status'])}»."
 
-        charge_id = offer["payment_charge_id"]
-        claimed = await self.db.claim_refund(
-            charge_id=charge_id,
-            offer_id=offer_id,
-            user_id=offer["buyer_id"],
-            amount=int(offer.get("paid_amount") or offer["amount"]),
-            reason="Возврат администратором",
-        )
-        if not claimed:
-            return "Возврат по этой оплате уже выполнялся."
+                    charge_id = offer["payment_charge_id"]
+                    claimed = await self.db.claim_refund(
+                    charge_id=charge_id,
+                    offer_id=offer_id,
+                    user_id=offer["buyer_id"],
+                    amount=int(offer.get("paid_amount") or offer["amount"]),
+                    reason="Возврат администратором",
+                    )
+                    if not claimed:
+                        return "Возврат по этой оплате уже выполнялся."
 
-        try:
-            await self.bot.refund_star_payment(
-                user_id=offer["buyer_id"],
-                telegram_payment_charge_id=charge_id,
-            )
-        except TelegramAPIError as exc:
-            await self.db.release_refund(charge_id)
-            logger.warning("Возврат по #%s не удался: %s", offer_id, exc.message)
-            return f"Telegram не выполнил возврат: {exc.message}"
+                        try:
+                            await self.bot.refund_star_payment(
+                            user_id=offer["buyer_id"],
+                            telegram_payment_charge_id=charge_id,
+                            )
+                        except TelegramAPIError as exc:
+                            await self.db.release_refund(charge_id)
+                            logger.warning("Возврат по #%s не удался: %s", offer_id, exc.message)
+                            return f"Telegram не выполнил возврат: {exc.message}"
 
-        ok = await self.db.mark_refunded(offer_id)
-        if not ok:
-            logger.error(
-                "Возврат по #%s выполнен, но статус не обновился", offer_id
-            )
-            await self._alert_admins(
-                f"<b>Возврат по сделке #{offer_id} выполнен, "
-                "но статус не обновился.</b>\n"
-                f"Charge: <code>{_esc(charge_id)}</code>\n"
-                "Проверьте сделку вручную."
-            )
-            return "Возврат выполнен, но статус не обновился. Проверьте вручную."
-        await self.db.add_event(offer_id, admin_id, "refunded", {"by": admin_id})
-        await self._refresh_card(offer_id)
-        await self._notify_user(
-            offer["buyer_id"],
-            f"Возврат {offer['amount']} Stars по сделке №{offer_id} выполнен Telegram.",
-        )
-        if offer.get("seller_id"):
-            await self._notify_user(
-                offer["seller_id"],
-                f"По сделке №{offer_id} выполнен возврат покупателю.",
-            )
-        return f"Возврат по сделке №{offer_id} выполнен."
+                            ok = await self.db.mark_refunded(offer_id)
+                            if not ok:
+                                logger.error(
+                                "Возврат по #%s выполнен, но статус не обновился", offer_id
+                                )
+                                await self._alert_admins(
+                                f"<b>Возврат по сделке #{offer_id} выполнен, "
+                                "но статус не обновился.</b>\n"
+                                f"Charge: <code>{_esc(charge_id)}</code>\n"
+                                "Проверьте сделку вручную."
+                                )
+                                return "Возврат выполнен, но статус не обновился. Проверьте вручную."
+                                await self.db.add_event(offer_id, admin_id, "refunded", {"by": admin_id})
+                                await self._refresh_card(offer_id)
+                                await self._notify_user(
+                                offer["buyer_id"],
+                                f"Возврат {offer['amount']} Stars по сделке №{offer_id} выполнен Telegram.",
+                                )
+                                if offer.get("seller_id"):
+                                    await self._notify_user(
+                                    offer["seller_id"],
+                                    f"По сделке №{offer_id} выполнен возврат покупателю.",
+                                    )
+                                    return f"Возврат по сделке №{offer_id} выполнен."
 
     async def payout(self, offer_id: int, reference: str, admin_id: int) -> str:
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            return "Сделка не найдена."
-        if offer["status"] not in {
-            OfferStatus.PAYOUT_PENDING.value,
-            OfferStatus.DISPUTED.value,
-        }:
-            return (
+            offer = await self.db.get_offer(offer_id)
+            if offer is None:
+                return "Сделка не найдена."
+                if offer["status"] not in {
+                OfferStatus.PAYOUT_PENDING.value,
+                OfferStatus.DISPUTED.value,
+                }:
+                    return (
                 f"Выплата возможна только после подтверждения получения "
                 f"(текущий статус: {status_label(offer['status'])})."
-            )
-        if not reference.strip():
-            return "Укажите ссылку/номер внешней выплаты."
-        ok = await self.db.mark_completed(offer_id, reference.strip(), admin_id)
-        if not ok:
-            return "Статус сделки уже изменился."
-        await self.db.add_event(
-            offer_id,
-            admin_id,
-            "payout_recorded",
-            {"reference": reference.strip(), "amount": offer["amount"]},
-        )
-        await self._refresh_card(offer_id)
-        if offer.get("seller_id"):
-            await self._notify_user(
-                offer["seller_id"],
-                f"<b>Выплата по сделке №{offer_id} отмечена оператором</b>\n"
-                f"Сумма: {offer['amount']} Stars\n"
-                f"Подтверждение: <code>{_esc(reference)}</code>\n"
-                "Выплата выполнена вне Bot API (вручную оператором).",
-            )
-        await self._notify_user(
-            offer["buyer_id"],
-            f"Сделка №{offer_id} завершена. Спасибо.",
-        )
-        return f"Выплата по сделке №{offer_id} отмечена."
+                )
+                if not reference.strip():
+                    return "Укажите ссылку/номер внешней выплаты."
+                    ok = await self.db.mark_completed(offer_id, reference.strip(), admin_id)
+                    if not ok:
+                        return "Статус сделки уже изменился."
+                        await self.db.add_event(
+                        offer_id,
+                        admin_id,
+                        "payout_recorded",
+                        {"reference": reference.strip(), "amount": offer["amount"]},
+                        )
+                        await self._refresh_card(offer_id)
+                        if offer.get("seller_id"):
+                            await self._notify_user(
+                            offer["seller_id"],
+                            f"<b>Выплата по сделке №{offer_id} отмечена оператором</b>\n"
+                            f"Сумма: {offer['amount']} Stars\n"
+                            f"Подтверждение: <code>{_esc(reference)}</code>\n"
+                            "Выплата выполнена вне Bot API (вручную оператором).",
+                            )
+                            await self._notify_user(
+                            offer["buyer_id"],
+                            f"Сделка №{offer_id} завершена. Спасибо.",
+                            )
+                            return f"Выплата по сделке №{offer_id} отмечена."
 
     async def reconcile(self, offer_id: int, admin_id: int) -> str:
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            return "Сделка не найдена."
-        if offer["status"] not in {
-            OfferStatus.PAID.value,
-            OfferStatus.TRANSFERRING.value,
-            OfferStatus.NFT_TRANSFERRED.value,
-            OfferStatus.DISPUTED.value,
-        }:
-            return f"Сверка не нужна для статуса «{status_label(offer['status'])}»."
-        owns = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
-        if not owns:
-            return "NFT не найден в профиле покупателя. Передайте его вручную."
-        if offer["status"] == OfferStatus.NFT_TRANSFERRED.value:
-            await self.db.mark_nft_verified(offer_id, "admin_reconcile")
-        else:
-            ok = await self.db.mark_nft_transferred(
-                offer_id,
-                method="admin_reconcile",
-                verified=True,
-                verification_method="admin_reconcile",
-            )
-            if not ok:
-                return "Статус уже изменился."
-        await self.db.add_event(offer_id, admin_id, "admin_reconciled")
-        await self._refresh_card(offer_id)
-        await self._notify_user(
-            offer["buyer_id"],
-            f"NFT по сделке №{offer_id} найден в вашем профиле. Подтвердите получение.",
-            keyboard=buyer_confirm_keyboard(offer_id),
-        )
-        return f"NFT по сделке №{offer_id} подтверждён в профиле покупателя."
-
-    async def admin_pending_text(self) -> str:
-        offers = await self.db.list_by_statuses(
-            {
+            offer = await self.db.get_offer(offer_id)
+            if offer is None:
+                return "Сделка не найдена."
+                if offer["status"] not in {
                 OfferStatus.PAID.value,
                 OfferStatus.TRANSFERRING.value,
                 OfferStatus.NFT_TRANSFERRED.value,
-                OfferStatus.PAYOUT_PENDING.value,
                 OfferStatus.DISPUTED.value,
+                }:
+                    return f"Сверка не нужна для статуса «{status_label(offer['status'])}»."
+                owns = await self.gifts.buyer_owns_gift(offer["buyer_id"], offer["nft_slug"])
+                if not owns:
+                    return "NFT не найден в профиле покупателя. Передайте его вручную."
+                    if offer["status"] == OfferStatus.NFT_TRANSFERRED.value:
+                        await self.db.mark_nft_verified(offer_id, "admin_reconcile")
+                    else:
+                        ok = await self.db.mark_nft_transferred(
+                        offer_id,
+                        method="admin_reconcile",
+                        verified=True,
+                        verification_method="admin_reconcile",
+                        )
+                        if not ok:
+                            return "Статус уже изменился."
+                            await self.db.add_event(offer_id, admin_id, "admin_reconciled")
+                            await self._refresh_card(offer_id)
+                            await self._notify_user(
+                            offer["buyer_id"],
+                            f"NFT по сделке №{offer_id} найден в вашем профиле. Подтвердите получение.",
+                            keyboard=buyer_confirm_keyboard(offer_id),
+                            )
+                            return f"NFT по сделке №{offer_id} подтверждён в профиле покупателя."
+
+    async def admin_pending_text(self) -> str:
+            offers = await self.db.list_by_statuses(
+            {
+            OfferStatus.PAID.value,
+            OfferStatus.TRANSFERRING.value,
+            OfferStatus.NFT_TRANSFERRED.value,
+            OfferStatus.PAYOUT_PENDING.value,
+            OfferStatus.DISPUTED.value,
             },
             limit=20,
-        )
-        if not offers:
-            return "Нет сделок, требующих внимания."
-        lines = ["<b>Сделки, требующие внимания</b>"]
-        for offer in offers:
-            lines.append(
-                f"#{offer['id']} · {_esc(self._short_title(offer['nft_title'], 35))} · "
-                f"{offer['amount']} Stars · {status_label(offer['status'])}"
             )
-        return "\n".join(lines)
+            if not offers:
+                return "Нет сделок, требующих внимания."
+                lines = ["<b>Сделки, требующие внимания</b>"]
+                for offer in offers:
+                    lines.append(
+                    f"#{offer['id']} · {_esc(self._short_title(offer['nft_title'], 35))} · "
+                    f"{offer['amount']} Stars · {status_label(offer['status'])}"
+                    )
+                    return "\n".join(lines)
 
     async def admin_stats_text(self) -> str:
-        stats = await self.db.stats()
-        if not stats:
-            return "Статистика пуста."
-        lines = ["<b>Статистика сделок</b>"]
-        for status, count in sorted(stats.items(), key=lambda item: item[0]):
-            lines.append(f"{status_label(status)}: <b>{count}</b>")
+            stats = await self.db.stats()
+            if not stats:
+                return "Статистика пуста."
+                lines = ["<b>Статистика сделок</b>"]
+                for status, count in sorted(stats.items(), key=lambda item: item[0]):
+                    lines.append(f"{status_label(status)}: <b>{count}</b>")
 
-        try:
-            balance = await self.bot.get_my_star_balance()
-            lines.append(f"\nБаланс бота: <b>{balance.amount} Stars</b>")
-        except TelegramAPIError:
-            lines.append("\nБаланс бота: недоступен")
-        return "\n".join(lines)
+                    try:
+                        balance = await self.bot.get_my_star_balance()
+                        lines.append(f"\nБаланс бота: <b>{balance.amount} Stars</b>")
+                    except TelegramAPIError:
+                        lines.append("\nБаланс бота: недоступен")
+                        return "\n".join(lines)
 
     async def deal_details_text(self, offer_id: int) -> str:
-        offer = await self.db.get_offer(offer_id)
-        if offer is None:
-            return "Сделка не найдена."
-        events = await self.db.get_events(offer_id, limit=8)
-        lines = [
-            f"<b>Сделка №{offer['id']}</b>",
-            f"Статус: <b>{status_label(offer['status'])}</b>",
-            f"NFT: {self._nft_link(offer)}",
-            f"Покупатель: {self._buyer_label(offer)}",
-            f"Продавец: {self._seller_label(offer)}",
-            f"Сумма: <b>{offer['amount']} Stars</b>",
-            f"Создана: {self._fmt_dt(offer['created_at'])}",
-        ]
-        if offer.get("paid_at"):
-            lines.append(f"Оплачена: {self._fmt_dt(offer['paid_at'])}")
-        if offer.get("payment_charge_id"):
-            lines.append(f"Charge ID: <code>{_esc(offer['payment_charge_id'])}</code>")
-        if offer.get("payout_reference"):
-            lines.append(f"Выплата: <code>{_esc(offer['payout_reference'])}</code>")
-        if events:
-            lines.append("\n<b>История</b>")
-            for event in events:
-                lines.append(
-                    f"{self._fmt_dt(event['created_at'])} · {_esc(event['action'])}"
-                )
-        return "\n".join(lines)
+            offer = await self.db.get_offer(offer_id)
+            if offer is None:
+                return "Сделка не найдена."
+                events = await self.db.get_events(offer_id, limit=8)
+                lines = [
+                f"<b>Сделка №{offer['id']}</b>",
+                f"Статус: <b>{status_label(offer['status'])}</b>",
+                f"NFT: {self._nft_link(offer)}",
+                f"Покупатель: {self._buyer_label(offer)}",
+                f"Продавец: {self._seller_label(offer)}",
+                f"Сумма: <b>{offer['amount']} Stars</b>",
+                f"Создана: {self._fmt_dt(offer['created_at'])}",
+                ]
+                if offer.get("paid_at"):
+                    lines.append(f"Оплачена: {self._fmt_dt(offer['paid_at'])}")
+                    if offer.get("payment_charge_id"):
+                        lines.append(f"Charge ID: <code>{_esc(offer['payment_charge_id'])}</code>")
+                        if offer.get("payout_reference"):
+                            lines.append(f"Выплата: <code>{_esc(offer['payout_reference'])}</code>")
+                            if events:
+                                lines.append("\n<b>История</b>")
+                                for event in events:
+                                    lines.append(
+                                    f"{self._fmt_dt(event['created_at'])} · {_esc(event['action'])}"
+                                    )
+                                    return "\n".join(lines)
 
     async def user_offers_text(self, user_id: int) -> str:
-        offers = await self.db.list_user_offers(user_id, limit=10)
-        if not offers:
-            return "У вас пока нет сделок."
-        lines = ["<b>Ваши последние сделки</b>"]
-        for offer in offers:
-            lines.append(
-                f"#{offer['id']} · {_esc(self._short_title(offer['nft_title'], 35))} · "
-                f"{offer['amount']} Stars · {status_label(offer['status'])}"
-            )
-        return "\n".join(lines)
+            offers = await self.db.list_user_offers(user_id, limit=10)
+            if not offers:
+                return "У вас пока нет сделок."
+                lines = ["<b>Ваши последние сделки</b>"]
+                for offer in offers:
+                    lines.append(
+                    f"#{offer['id']} · {_esc(self._short_title(offer['nft_title'], 35))} · "
+                    f"{offer['amount']} Stars · {status_label(offer['status'])}"
+                    )
+                    return "\n".join(lines)
 
     async def business_status_text(self, user_id: int) -> str:
-        conn = await self.db.get_business_connection(user_id)
-        if not conn or not conn.get("is_enabled"):
-            return (
+            conn = await self.db.get_business_connection(user_id)
+            if not conn or not conn.get("is_enabled"):
+                return (
                 "Telegram Business не подключён.\n\n"
                 "Чтобы включить автопередачу NFT, подключите бота в "
                 "Настройки → Telegram Business → Чат-боты и выдайте права "
                 "на просмотр и передачу подарков."
-            )
-        rights = conn.get("rights") or {}
-        lines = ["<b>Telegram Business подключён</b>"]
-        lines.append(
-            "Просмотр подарков: "
-            + ("да" if rights.get("can_view_gifts_and_stars") else "нет")
-        )
-        lines.append(
-            "Передача подарков: "
-            + ("да" if rights.get("can_transfer_and_upgrade_gifts") else "нет")
-        )
-        lines.append(
-            "Передача Stars: "
-            + ("да" if rights.get("can_transfer_stars") else "нет")
-        )
-        if not (
-            rights.get("can_view_gifts_and_stars")
-            and rights.get("can_transfer_and_upgrade_gifts")
-        ):
-            lines.append(
+                )
+                rights = conn.get("rights") or {}
+                lines = ["<b>Telegram Business подключён</b>"]
+                lines.append(
+                "Просмотр подарков: "
+                + ("да" if rights.get("can_view_gifts_and_stars") else "нет")
+                )
+                lines.append(
+                "Передача подарков: "
+                + ("да" if rights.get("can_transfer_and_upgrade_gifts") else "нет")
+                )
+                lines.append(
+                "Передача Stars: "
+                + ("да" if rights.get("can_transfer_stars") else "нет")
+                )
+                if not (
+                rights.get("can_view_gifts_and_stars")
+                and rights.get("can_transfer_and_upgrade_gifts")
+                ):
+                    lines.append(
                 "\nДля автопередачи нужны права на просмотр и передачу подарков."
-            )
-        return "\n".join(lines)
+                )
+                return "\n".join(lines)
 
-    # --------------------------------------------------------- business update
+                # --------------------------------------------------------- business update
 
     async def on_business_connection(self, connection) -> None:
-        rights = {}
-        if connection.rights is not None:
-            rights = connection.rights.model_dump(exclude_none=True)
-        await self.db.save_business_connection(
-            user_id=connection.user.id,
-            connection_id=connection.id,
-            user_chat_id=connection.user_chat_id,
-            is_enabled=connection.is_enabled,
-            rights=rights,
-        )
-        logger.info(
-            "Telegram Business connection user=%s enabled=%s rights=%s",
-            connection.user.id,
-            connection.is_enabled,
-            sorted(key for key, value in rights.items() if value),
-        )
-        if connection.is_enabled:
-            target = connection.user_chat_id or connection.user.id
-            await self._notify_user(
-                target,
-                "<b>Telegram Business подключён</b>\n"
-                "Бот будет проверять владение NFT и сможет передать его "
-                "покупателю, если выданы права на просмотр и передачу подарков.",
-            )
-        else:
-            await self.db.disable_business_connection(connection.id)
+            rights = {}
+            if connection.rights is not None:
+                rights = connection.rights.model_dump(exclude_none=True)
+                await self.db.save_business_connection(
+                user_id=connection.user.id,
+                connection_id=connection.id,
+                user_chat_id=connection.user_chat_id,
+                is_enabled=connection.is_enabled,
+                rights=rights,
+                )
+                logger.info(
+                "Telegram Business connection user=%s enabled=%s rights=%s",
+                connection.user.id,
+                connection.is_enabled,
+                sorted(key for key, value in rights.items() if value),
+                )
+                if connection.is_enabled:
+                    target = connection.user_chat_id or connection.user.id
+                    await self._notify_user(
+                    target,
+                    "<b>Telegram Business подключён</b>\n"
+                    "Бот будет проверять владение NFT и сможет передать его "
+                    "покупателю, если выданы права на просмотр и передачу подарков.",
+                    )
+                else:
+                    await self.db.disable_business_connection(connection.id)
 
-    # -------------------------------------------------------------- maintenance
+                    # -------------------------------------------------------------- maintenance
 
     async def refresh_pending_cards(self) -> None:
-        """Обновляет «действует ещё …» на активных карточках не чаще раза в минуту."""
-        for offer in await self.db.pending_offers():
-            caption = self._caption(offer)
-            if self._last_card_caption.get(offer["id"]) == caption:
-                continue
-            await self._refresh_card(offer["id"])
+            """Обновляет «действует ещё …» на активных карточках не чаще раза в минуту."""
+            for offer in await self.db.pending_offers():
+                caption = self._caption(offer)
+                if self._last_card_caption.get(offer["id"]) == caption:
+                    continue
+                    await self._refresh_card(offer["id"])
 
     async def expire_offers(self) -> None:
-        due = await self.db.due_expirations()
-        for offer in due:
-            if await self.db.mark_expired(offer["id"]):
-                await self.db.add_event(offer["id"], None, "expired")
-                await self._refresh_card(offer["id"])
-                logger.info("Предложение #%s истекло", offer["id"])
+            due = await self.db.due_expirations()
+            for offer in due:
+                if await self.db.mark_expired(offer["id"]):
+                    await self.db.add_event(offer["id"], None, "expired")
+                    await self._refresh_card(offer["id"])
+                    logger.info("Предложение #%s истекло", offer["id"])
 
     async def expire_payments(self) -> None:
-        due = await self.db.due_payment_timeouts()
-        for offer in due:
-            if await self.db.mark_cancelled(
+            due = await self.db.due_payment_timeouts()
+            for offer in due:
+                if await self.db.mark_cancelled(
                 offer["id"],
                 {OfferStatus.AWAITING_PAYMENT.value},
                 "Истёк срок оплаты",
-            ):
-                await self.db.add_event(offer["id"], None, "payment_timeout")
+                ):
+                    await self.db.add_event(offer["id"], None, "payment_timeout")
                 await self._refresh_card(offer["id"])
                 await self._notify_user(
-                    offer["buyer_id"],
-                    f"Срок оплаты по сделке №{offer['id']} истёк. Сделка отменена.",
+                offer["buyer_id"],
+                f"Срок оплаты по сделке №{offer['id']} истёк. Сделка отменена.",
                 )
                 if offer.get("seller_id"):
                     await self._notify_user(
-                        offer["seller_id"],
-                        f"Срок оплаты по сделке №{offer['id']} истёк. Сделка отменена.",
+                    offer["seller_id"],
+                    f"Срок оплаты по сделке №{offer['id']} истёк. Сделка отменена.",
                     )
 
-    # ----------------------------------------------------------------- helpers
+                    # ----------------------------------------------------------------- helpers
 
     def _is_seller(self, offer: dict[str, Any], user: User) -> bool:
-        if offer.get("seller_id") is not None:
-            return offer["seller_id"] == user.id
-        if offer.get("seller_username") and user.username:
-            return offer["seller_username"].lower() == user.username.lower()
-        # 
-        # 
-        if offer.get("seller_id") is None and not offer.get("seller_username"):
-            return True
-        return False
+            if offer.get("seller_id") is not None:
+                return offer["seller_id"] == user.id
+                if offer.get("seller_username") and user.username:
+                    return offer["seller_username"].lower() == user.username.lower()
+                    #
+                    #
+                    if offer.get("seller_id") is None and not offer.get("seller_username"):
+                        return True
+                        return False
 
     async def _bind_seller_if_needed(self, offer: dict[str, Any], user: User) -> None:
-        if offer.get("seller_id") is None:
-            await self.db.bind_seller(
+            if offer.get("seller_id") is None:
+                await self.db.bind_seller(
                 offer["id"],
                 user.id,
                 user.username,
                 " ".join(p for p in (user.first_name, user.last_name) if p),
-            )
+                )
