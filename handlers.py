@@ -331,12 +331,6 @@ async def cmd_offer(
         message, db, settings, Permission.CREATE_OFFER
     ):
         return
-    if message.chat.type == ChatType.PRIVATE.value:
-        await message.reply(
-            "Предложения создаются в групповом чате. Добавьте бота в группу "
-            "и отправьте команду ответом на сообщение продавца."
-        )
-        return
     await service.parse_and_create(message)
 
 
