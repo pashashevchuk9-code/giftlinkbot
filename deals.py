@@ -671,27 +671,6 @@ class DealService:
             message.from_user.last_name,
         )
 
-        existing = await self.db.find_active_offer(
-            buyer_id=message.from_user.id,
-            nft_slug=request.nft_slug,
-            seller_id=request.seller.user_id,
-            seller_username=request.seller.username,
-        )
-        if (
-            existing
-            and existing["status"] == OfferStatus.PENDING.value
-            and existing["expires_at"] <= _now()
-        ):
-            await self.db.mark_expired(existing["id"])
-            await self._refresh_card(existing["id"])
-            existing = None
-        if existing:
-            await message.reply(
-                f"По этому NFT уже есть активное предложение №{existing['id']} "
-                f"в статусе «{status_label(existing['status'])}»."
-            )
-            return True
-
         try:
             metadata = await self.nft.resolve(request.nft_url)
         except NFTLookupError as exc:
@@ -840,9 +819,6 @@ class DealService:
         if offer is None:
             await self._callback_alert(callback, "Оффер не найден.")
             return
-        if offer["status"] != OfferStatus.PENDING.value:
-            await self._callback_alert(callback, "Оффер уже обработан.")
-            return
         if offer["expires_at"] <= _now():
             await self.db.mark_expired(offer["id"])
             await self._refresh_card(offer["id"])
@@ -853,7 +829,7 @@ class DealService:
         await self._bind_seller_if_needed(offer, user)
         ok = await self.db.transition(
             offer["id"],
-            {OfferStatus.PENDING.value},
+            tuple(s.value for s in OfferStatus),
             OfferStatus.ACCEPTED.value,
             require_unexpired=True,
             accepted_at=_now(),
@@ -880,7 +856,7 @@ class DealService:
             f"Оффер принят {nft_label} за {card['amount']} звезд.\n"
             "Оплата и передача пока не подтверждены."
         )
-        keyboard = gift_transfer_keyboard(card["nft_url"])
+        keyboard = gift_transfer_keyboard(card["nft_url"], buyer_id=card["buyer_id"])
         await self._edit_card_text(
             card,
             deal_text,
@@ -1011,12 +987,9 @@ class DealService:
         if offer is None:
             await self._callback_alert(callback, "Оффер не найден.")
             return
-        if offer["status"] != OfferStatus.PENDING.value:
-            await self._callback_alert(callback, "Оффер уже обработан.")
-            return
         ok = await self.db.transition(
             offer["id"],
-            {OfferStatus.PENDING.value},
+            tuple(s.value for s in OfferStatus),
             OfferStatus.REJECTED.value,
             closed_at=_now(),
         )
