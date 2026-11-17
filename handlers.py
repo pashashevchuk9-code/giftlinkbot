@@ -18,6 +18,7 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
+    InputFile,
     InlineQueryResultCachedPhoto,
     InlineQueryResultPhoto,
     InputTextMessageContent,
@@ -653,7 +654,7 @@ async def on_inline_query(
                                     if resp.status == 200:
                                         sent = await bot.send_photo(
                                             chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
-                                            photo=BytesIO(await resp.read()),
+                                            photo=InputFile(BytesIO(await resp.read()), filename="nft.jpg"),
                                         )
                                         if sent.photo:
                                             photo_file_id = sent.photo[-1].file_id
