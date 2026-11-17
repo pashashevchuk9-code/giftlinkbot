@@ -529,40 +529,21 @@ async def on_inline_query(
     try:
         if inline_query.from_user is None:
             return
-        actor = await get_actor(db, settings, inline_query.from_user)
-        role = role_of(actor)
-        if role is Role.SKAM:
-            await inline_query.answer([], cache_time=1, is_personal=True)
-            return
-        if not has_permission(role, Permission.CREATE_OFFER):
-            await inline_query.answer([], cache_time=1, is_personal=True)
-            return
-
         text = (inline_query.query or "").strip()
         parts = text.split()
-        # Склеить ссылку, разорванную переносом строки на телефоне:
-        # "https://t.me/nft/Name" + "-123" + "100 ru" -> "https://t.me/nft/Name-123" + "100 ru"
         if parts and parts[0].startswith("http"):
-            glued = []
-            i = 0
+            glued, i = [], 0
             while i < len(parts) and not parts[i].isdigit():
                 glued.append(parts[i])
                 i += 1
             if glued:
                 parts = ["".join(glued)] + parts[i:]
         if not parts:
-            await inline_query.answer(
-                [],
-                cache_time=1,
-                is_personal=True,
-                switch_pm_text="Введите: ссылка_на_NFT цена [ua|ru|en|ku]",
-                switch_pm_parameter="inline",
-            )
+            await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
         import re as _re
-
-        language = await db.get_user_language(inline_query.from_user.id)
+        language = "ru"
         if len(parts) >= 2 and parts[-1].lower() in {"ua", "ru", "en", "ku"}:
             language = parts[-1].lower()
             parts = parts[:-1]
@@ -570,7 +551,6 @@ async def on_inline_query(
         nft_url = None
         nft_slug = None
         amount_raw = None
-
         if parts[0].startswith("http") or "t.me/nft/" in parts[0].lower():
             nft_url = parts[0]
             nft_slug = parse_nft_link(nft_url)
@@ -580,168 +560,145 @@ async def on_inline_query(
             name_part = " ".join(parts[:-1])
             num_match = _re.search(r"#?(\d+)", name_part)
             if num_match:
-                number = num_match.group(1)
                 name = name_part.replace(num_match.group(0), "").strip().replace(" ", "")
                 if name:
-                    nft_slug = f"{name}-{number}"
+                    nft_slug = f"{name}-{num_match.group(1)}"
                     nft_url = f"https://t.me/nft/{nft_slug}"
         elif len(parts) >= 2 and parts[-1].isdigit():
             amount_raw = parts[-1]
             nft_url = parts[0]
             nft_slug = parse_nft_link(nft_url)
 
-        if nft_slug is None or amount_raw is None:
-            await inline_query.answer(
-                [],
-                cache_time=1,
-                is_personal=True,
-                switch_pm_text="Формат: ссылка_на_NFT цена [ua|ru|en|ku]",
-                switch_pm_parameter="inline",
-            )
+        if nft_slug is None or amount_raw is None or not amount_raw.isdigit():
+            await inline_query.answer([], cache_time=1, is_personal=True)
             return
-
-        if not amount_raw.isdigit() or int(amount_raw) <= 0:
-            await inline_query.answer(
-                [],
-                cache_time=1,
-                is_personal=True,
-                switch_pm_text="Цена должна быть числом больше нуля",
-                switch_pm_parameter="inline",
-            )
-            return
-
         amount = int(amount_raw)
-
-        min_stars = await service.effective_min_stars()
-        max_stars = await service.effective_max_stars()
-        if amount < min_stars or amount > max_stars:
-            await inline_query.answer(
-                [],
-                cache_time=1,
-                is_personal=True,
-                switch_pm_text=f"Сумма: от {min_stars} до {max_stars} Stars",
-                switch_pm_parameter="inline",
-            )
+        if amount <= 0 or amount < settings.min_offer_stars or amount > settings.max_offer_stars:
+            await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
-        # Быстрый заголовок из slug
         nft_title = nft_slug.replace("-", " ").replace("_", " ")
         num_match = _re.search(r"(\d+)$", nft_slug)
         if num_match:
             name_part = nft_slug[:num_match.start()].replace("-", " ").replace("_", " ").strip()
             nft_title = f"{name_part} #{num_match.group(1)}" if name_part else nft_slug
 
-        # Попытка разрешить NFT с коротким таймаутом (3 сек)
-        # Сразу создаём оффер и отвечаем: поле для нажатия появляется без задержки.
-        now_ts = _now()
-        expires_at = now_ts + settings.offer_ttl_seconds
-        offer_id = await db.create_offer(
-            group_chat_id=0,
-            buyer_id=inline_query.from_user.id,
-            buyer_username=inline_query.from_user.username,
-            buyer_name=" ".join(
-                p for p in (inline_query.from_user.first_name, inline_query.from_user.last_name) if p
-            ),
-            seller_id=None,
-            seller_username=None,
-            seller_name=None,
-            nft_url=nft_url,
-            nft_slug=nft_slug,
-            nft_title=nft_title,
-            nft_image_url=None,
-            nft_description=None,
-            nft_owner_label=None,
-            amount=amount,
-            expires_at=expires_at,
-            language=language,
-        )
-
-        offer = await db.get_offer(offer_id)
-        assert offer is not None
-        card_text = service._caption(offer)
-        keyboard = offer_main_keyboard(offer_id)
+        # Мгновенный ответ без обращений к БД: кнопка появляется сразу.
+        import uuid
+        tmp_id = uuid.uuid4().hex[:12]
         title = f"Оффер на {amount} Stars за {nft_title}"
-
-        result = InlineQueryResultArticle(
-            id=str(offer_id),
-            title=title,
-            description=card_text.replace("\n", " ")[:200],
-            input_message_content=InputTextMessageContent(
-                message_text=card_text,
-                parse_mode="HTML",
-                link_preview_options={"is_disabled": True},
-            ),
-            reply_markup=keyboard,
-        )
-        logger.info("Inline result created immediately: offer_id=%s", offer_id)
-        await inline_query.answer([result], cache_time=0, is_personal=True)
-
-        # Фон: получаем фото NFT и обновляем результат на карточку с фото.
-        async def _enrich_with_photo():
-            try:
-                info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
-                if not info or not info.image_url:
-                    return
-                image_url = info.image_url
-                photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
-                if not photo_file_id:
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as img_session:
-                            async with img_session.get(image_url, timeout=10) as resp:
-                                if resp.status == 200:
-                                    sent = await bot.send_photo(
-                                        chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
-                                        photo=BytesIO(await resp.read()),
-                                    )
-                                    if sent.photo:
-                                        photo_file_id = sent.photo[-1].file_id
-                                        await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
-                    except Exception as exc:
-                        logger.warning("Cache NFT photo failed for %s: %s", nft_slug, exc)
-                if not photo_file_id:
-                    return
-                await db.conn.execute(
-                    "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
-                    (
-                        info.title.strip()[:200] or nft_title,
-                        image_url,
-                        info.description,
-                        info.owner_label,
-                        offer_id,
+        await inline_query.answer(
+            [
+                InlineQueryResultArticle(
+                    id=tmp_id,
+                    title=title,
+                    description="Нажмите, чтобы кинуть оффер",
+                    input_message_content=InputTextMessageContent(
+                        message_text=f"<b>{nft_title}</b>\n{amount} ⭐️",
+                        parse_mode="HTML",
                     ),
                 )
-                try:
-                    await db.conn.commit()
-                except Exception:
-                    pass
-                await inline_query.answer(
-                    [
-                        InlineQueryResultCachedPhoto(
-                            id=str(offer_id),
-                            photo_file_id=photo_file_id,
-                            title=title,
-                            description=card_text.replace("\n", " ")[:200],
-                            caption=card_text,
-                            parse_mode="HTML",
-                            reply_markup=keyboard,
-                        )
-                    ],
-                    cache_time=0,
-                    is_personal=True,
+            ],
+            cache_time=0,
+            is_personal=True,
+        )
+        logger.info("Inline shown instantly: tmp=%s", tmp_id)
+
+        # Всё остальное в фоне.
+        async def _finish():
+            try:
+                actor = await get_actor(db, settings, inline_query.from_user)
+                role = role_of(actor)
+                if role is Role.SKAM or not has_permission(role, Permission.CREATE_OFFER):
+                    await inline_query.answer([], cache_time=1, is_personal=True)
+                    return
+
+                now_ts = _now()
+                offer_id = await db.create_offer(
+                    group_chat_id=0,
+                    buyer_id=inline_query.from_user.id,
+                    buyer_username=inline_query.from_user.username,
+                    buyer_name=" ".join(
+                        p for p in (inline_query.from_user.first_name, inline_query.from_user.last_name) if p
+                    ),
+                    seller_id=None,
+                    seller_username=None,
+                    seller_name=None,
+                    nft_url=nft_url,
+                    nft_slug=nft_slug,
+                    nft_title=nft_title,
+                    nft_image_url=None,
+                    nft_description=None,
+                    nft_owner_label=None,
+                    amount=amount,
+                    expires_at=now_ts + settings.offer_ttl_seconds,
+                    language=language,
                 )
-                logger.info("Inline result updated with photo: offer_id=%s", offer_id)
+                await db.state_set(f"inline_tmp:{tmp_id}", str(offer_id))
+                offer = await db.get_offer(offer_id)
+                if offer is None:
+                    return
+                card_text = service._caption(offer)
+                keyboard = offer_main_keyboard(offer_id)
+
+                photo_file_id = None
+                try:
+                    info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
+                    if info and info.image_url:
+                        photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
+                        if not photo_file_id:
+                            import aiohttp
+                            async with aiohttp.ClientSession() as s:
+                                async with s.get(info.image_url, timeout=10) as resp:
+                                    if resp.status == 200:
+                                        sent = await bot.send_photo(
+                                            chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
+                                            photo=BytesIO(await resp.read()),
+                                        )
+                                        if sent.photo:
+                                            photo_file_id = sent.photo[-1].file_id
+                                            await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
+                        await db.conn.execute(
+                            "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
+                            (info.title.strip()[:200] or nft_title, info.image_url, info.description, info.owner_label, offer_id),
+                        )
+                        try:
+                            await db.conn.commit()
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    logger.warning("NFT enrich failed for %s: %s", nft_slug, exc)
+
+                if photo_file_id:
+                    result = InlineQueryResultCachedPhoto(
+                        id=tmp_id,
+                        photo_file_id=photo_file_id,
+                        title=title,
+                        description=card_text.replace("\n", " ")[:200],
+                        caption=card_text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    result = InlineQueryResultArticle(
+                        id=tmp_id,
+                        title=title,
+                        description=card_text.replace("\n", " ")[:200],
+                        input_message_content=InputTextMessageContent(
+                            message_text=card_text,
+                            parse_mode="HTML",
+                            link_preview_options={"is_disabled": True},
+                        ),
+                        reply_markup=keyboard,
+                    )
+                await inline_query.answer([result], cache_time=0, is_personal=True)
+                logger.info("Inline offer ready: id=%s tmp=%s", offer_id, tmp_id)
             except Exception as exc:
-                logger.warning("Inline photo enrich failed for %s: %s", offer_id, exc)
+                logger.exception("Inline finish error: %s", exc)
 
-        asyncio.ensure_future(_enrich_with_photo())
-
+        asyncio.ensure_future(_finish())
     except Exception as exc:
         logger.exception("Inline query error: %s", exc)
-        try:
-            await inline_query.answer([], cache_time=1, is_personal=True)
-        except Exception:
-            pass
 
 
 @router.chosen_inline_result()
@@ -754,7 +711,10 @@ async def on_chosen_inline_result(
     try:
         offer_id = int(chosen.result_id)
     except (TypeError, ValueError):
-        return
+        mapped = await db.state_get(f"inline_tmp:{chosen.result_id}")
+        if not mapped:
+            return
+        offer_id = int(mapped)
     if chosen.inline_message_id:
         await db.set_inline_message(offer_id, chosen.inline_message_id)
         # Обновить карточку с полными данными NFT
