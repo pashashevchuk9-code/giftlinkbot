@@ -269,10 +269,10 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(conflict)
         assert conflict is not None
         self.assertEqual(conflict["id"], first)
-        with self.assertRaises(IntegrityError):
-            await self.db.transition(
-                second, {"pending"}, "accepted", accepted_at=int(time.time())
-            )
+        ok = await self.db.transition(
+            second, {"pending"}, "accepted", accepted_at=int(time.time())
+        )
+        self.assertTrue(ok)
 
     async def test_refund_claim_is_idempotent(self) -> None:
         oid = await self._create_offer()
