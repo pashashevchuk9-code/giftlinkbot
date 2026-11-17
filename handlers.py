@@ -628,14 +628,17 @@ async def on_inline_query(
 
         card_text = service._caption(await db.get_offer(offer_id) or offer)
 
+        # Текст оффера + голая ссылка NFT: Telegram сам рисует официальную карточку
+        # под текстом, а кнопки остаются в сообщении.
+        message_text = card_text + "\n" + nft_url
         result = InlineQueryResultArticle(
             id=str(offer_id),
             title=title,
             description=card_text.replace("\n", " ")[:200],
             input_message_content=InputTextMessageContent(
-                message_text=card_text,
+                message_text=message_text,
                 parse_mode="HTML",
-                link_preview_options=LinkPreviewOptions(url=nft_url),
+                link_preview_options=LinkPreviewOptions(is_disabled=False),
             ),
             reply_markup=keyboard,
         )
