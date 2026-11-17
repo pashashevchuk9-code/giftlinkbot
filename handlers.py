@@ -632,20 +632,7 @@ async def on_inline_query(
             nft_title = f"{name_part} #{num_match.group(1)}" if name_part else nft_slug
 
         # Попытка разрешить NFT с коротким таймаутом (3 сек)
-        # Попробовать получить превью NFT до ответа (как в рабочей версии)
-        nft_image_url = None
-        nft_description = None
-        nft_owner_label = None
-        try:
-            info = await asyncio.wait_for(nft.resolve(nft_url), timeout=3.0)
-            if info:
-                nft_title = info.title.strip()[:200] or nft_title
-                nft_image_url = info.image_url
-                nft_description = info.description
-                nft_owner_label = info.owner_label
-        except Exception as exc:
-            logger.warning("NFT resolve failed/timed out for %s: %s", nft_slug, exc)
-
+        # Сразу создаём оффер и отвечаем: поле для нажатия появляется без задержки.
         now_ts = _now()
         expires_at = now_ts + settings.offer_ttl_seconds
         offer_id = await db.create_offer(
@@ -661,9 +648,9 @@ async def on_inline_query(
             nft_url=nft_url,
             nft_slug=nft_slug,
             nft_title=nft_title,
-            nft_image_url=nft_image_url,
-            nft_description=nft_description,
-            nft_owner_label=nft_owner_label,
+            nft_image_url=None,
+            nft_description=None,
+            nft_owner_label=None,
             amount=amount,
             expires_at=expires_at,
             language=language,
@@ -673,64 +660,81 @@ async def on_inline_query(
         assert offer is not None
         card_text = service._caption(offer)
         keyboard = offer_main_keyboard(offer_id)
+        title = f"Оффер на {amount} Stars за {nft_title}"
 
-        if nft_image_url:
-            # Используем закешированный в Telegram file_id: Telegram не грузит внешнюю картинку сам.
-            photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
-            if not photo_file_id:
-                try:
-                    import aiohttp
-                    async with aiohttp.ClientSession() as img_session:
-                        async with img_session.get(nft_image_url, timeout=10) as resp:
-                            if resp.status == 200:
-                                image_bytes = await resp.read()
-                                chat_id = next(iter(settings.owner_ids), inline_query.from_user.id)
-                                sent = await bot.send_photo(
-                                    chat_id=chat_id, photo=BytesIO(image_bytes)
-                                )
-                                if sent.photo:
-                                    photo_file_id = sent.photo[-1].file_id
-                                    await db.state_set(
-                                        f"nft_photo:{nft_slug}", photo_file_id
-                                    )
-                except Exception as exc:
-                    logger.warning("Cache NFT photo failed for %s: %s", nft_slug, exc)
-
-            if photo_file_id:
-                result = InlineQueryResultCachedPhoto(
-                    id=str(offer_id),
-                    photo_file_id=photo_file_id,
-                    title=f"Оффер на {amount} Stars за {nft_title}",
-                    description=card_text.replace("\n", " ")[:200],
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                )
-            else:
-                result = InlineQueryResultPhoto(
-                    id=str(offer_id),
-                    photo_url=nft_image_url,
-                    thumbnail_url=nft_image_url,
-                    title=f"Оффер на {amount} Stars за {nft_title}",
-                    description=card_text.replace("\n", " ")[:200],
-                    caption=card_text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                )
-        else:
-            result = InlineQueryResultArticle(
-                id=str(offer_id),
-                title=f"Оффер на {amount} Stars за {nft_title}",
-                description=card_text.replace("\n", " ")[:200],
-                input_message_content=InputTextMessageContent(
-                    message_text=card_text,
-                    parse_mode="HTML",
-                    link_preview_options={"is_disabled": True},
-                ),
-                reply_markup=keyboard,
-            )
-        logger.info("Inline result created: offer_id=%s, has_photo=%s", offer_id, bool(nft_image_url))
+        result = InlineQueryResultArticle(
+            id=str(offer_id),
+            title=title,
+            description=card_text.replace("\n", " ")[:200],
+            input_message_content=InputTextMessageContent(
+                message_text=card_text,
+                parse_mode="HTML",
+                link_preview_options={"is_disabled": True},
+            ),
+            reply_markup=keyboard,
+        )
+        logger.info("Inline result created immediately: offer_id=%s", offer_id)
         await inline_query.answer([result], cache_time=0, is_personal=True)
+
+        # Фон: получаем фото NFT и обновляем результат на карточку с фото.
+        async def _enrich_with_photo():
+            try:
+                info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
+                if not info or not info.image_url:
+                    return
+                image_url = info.image_url
+                photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
+                if not photo_file_id:
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as img_session:
+                            async with img_session.get(image_url, timeout=10) as resp:
+                                if resp.status == 200:
+                                    sent = await bot.send_photo(
+                                        chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
+                                        photo=BytesIO(await resp.read()),
+                                    )
+                                    if sent.photo:
+                                        photo_file_id = sent.photo[-1].file_id
+                                        await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
+                    except Exception as exc:
+                        logger.warning("Cache NFT photo failed for %s: %s", nft_slug, exc)
+                if not photo_file_id:
+                    return
+                await db.conn.execute(
+                    "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
+                    (
+                        info.title.strip()[:200] or nft_title,
+                        image_url,
+                        info.description,
+                        info.owner_label,
+                        offer_id,
+                    ),
+                )
+                try:
+                    await db.conn.commit()
+                except Exception:
+                    pass
+                await inline_query.answer(
+                    [
+                        InlineQueryResultCachedPhoto(
+                            id=str(offer_id),
+                            photo_file_id=photo_file_id,
+                            title=title,
+                            description=card_text.replace("\n", " ")[:200],
+                            caption=card_text,
+                            parse_mode="HTML",
+                            reply_markup=keyboard,
+                        )
+                    ],
+                    cache_time=0,
+                    is_personal=True,
+                )
+                logger.info("Inline result updated with photo: offer_id=%s", offer_id)
+            except Exception as exc:
+                logger.warning("Inline photo enrich failed for %s: %s", offer_id, exc)
+
+        asyncio.ensure_future(_enrich_with_photo())
 
     except Exception as exc:
         logger.exception("Inline query error: %s", exc)
