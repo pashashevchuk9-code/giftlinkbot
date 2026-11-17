@@ -96,13 +96,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_payment_charge
     WHERE payment_charge_id IS NOT NULL;
 
 -- Один продавец не может вести две активные сделки по одному и тому же NFT.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_one_active_nft
-    ON offers(nft_slug, seller_id)
-    WHERE seller_id IS NOT NULL
-      AND status IN (
-          'accepted', 'awaiting_payment', 'paid', 'transferring',
-          'nft_transferred', 'payout_pending', 'disputed'
-      );
 
 CREATE TABLE IF NOT EXISTS payment_charges (
     charge_id TEXT PRIMARY KEY,
@@ -645,6 +638,9 @@ class Database:
         await self._migrate_offers()
 
     async def _migrate_offers(self) -> None:
+        # Разрешаем无数 оферов с одним и тем же NFT.
+        await self.conn.execute("DROP INDEX IF EXISTS idx_offers_one_active_nft")
+
         cursor = await self.conn.execute("PRAGMA table_info(offers)")
         columns = {row["name"] for row in await cursor.fetchall()}
         if "inline_message_id" not in columns:
