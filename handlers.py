@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-
 import html
 import logging
+from io import BytesIO
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -18,6 +18,7 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
+    InlineQueryResultCachedPhoto,
     InlineQueryResultPhoto,
     InputTextMessageContent,
     Message,
@@ -519,6 +520,7 @@ async def on_error(event: ErrorEvent, bot: Bot, db: Database, settings: Settings
 @router.inline_query()
 async def on_inline_query(
     inline_query: InlineQuery,
+    bot: Bot,
     db: Database,
     settings: Settings,
     service: DealService,
@@ -673,16 +675,48 @@ async def on_inline_query(
         keyboard = offer_main_keyboard(offer_id)
 
         if nft_image_url:
-            result = InlineQueryResultPhoto(
-                id=str(offer_id),
-                photo_url=nft_image_url,
-                thumbnail_url=nft_image_url,
-                title=f"Оффер на {amount} Stars за {nft_title}",
-                description=card_text.replace("\n", " ")[:200],
-                caption=card_text,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
+            # Используем закешированный в Telegram file_id: Telegram не грузит внешнюю картинку сам.
+            photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
+            if not photo_file_id:
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as img_session:
+                        async with img_session.get(nft_image_url, timeout=10) as resp:
+                            if resp.status == 200:
+                                image_bytes = await resp.read()
+                                chat_id = next(iter(settings.owner_ids), inline_query.from_user.id)
+                                sent = await bot.send_photo(
+                                    chat_id=chat_id, photo=BytesIO(image_bytes)
+                                )
+                                if sent.photo:
+                                    photo_file_id = sent.photo[-1].file_id
+                                    await db.state_set(
+                                        f"nft_photo:{nft_slug}", photo_file_id
+                                    )
+                except Exception as exc:
+                    logger.warning("Cache NFT photo failed for %s: %s", nft_slug, exc)
+
+            if photo_file_id:
+                result = InlineQueryResultCachedPhoto(
+                    id=str(offer_id),
+                    photo_file_id=photo_file_id,
+                    title=f"Оффер на {amount} Stars за {nft_title}",
+                    description=card_text.replace("\n", " ")[:200],
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            else:
+                result = InlineQueryResultPhoto(
+                    id=str(offer_id),
+                    photo_url=nft_image_url,
+                    thumbnail_url=nft_image_url,
+                    title=f"Оффер на {amount} Stars за {nft_title}",
+                    description=card_text.replace("\n", " ")[:200],
+                    caption=card_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
         else:
             result = InlineQueryResultArticle(
                 id=str(offer_id),
