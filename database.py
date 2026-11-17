@@ -477,6 +477,103 @@ class _EmptyResultSet:
         self.last_insert_rowid = None
 
 
+class TursoHttpClient:
+    """Минимальный HTTP-клиент Turso на aiohttp (без внешних SDK)."""
+
+    def __init__(self, url: str, token: str) -> None:
+        self._url = url.rstrip("/")
+        self._token = token
+        self._session: Any = None
+
+    async def _ensure_session(self) -> Any:
+        if self._session is None or self._session.closed:
+            import aiohttp
+            self._session = aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {self._token}"}
+            )
+        return self._session
+
+    @staticmethod
+    def _convert_cell(cell: Any) -> Any:
+        if cell is None:
+            return None
+        if isinstance(cell, dict):
+            value = cell.get("value")
+            kind = cell.get("type")
+            if value is None:
+                return None
+            if kind in ("integer", "float"):
+                try:
+                    return int(value) if kind == "integer" else float(value)
+                except (TypeError, ValueError):
+                    return value
+            if kind == "blob":
+                try:
+                    import base64
+                    return base64.b64decode(cell.get("base64") or value)
+                except Exception:
+                    return value
+            return value
+        return cell
+
+    async def execute(self, stmt: Any, args: Any = None) -> Any:
+        session = await self._ensure_session()
+        sql = stmt if isinstance(stmt, str) else getattr(stmt, "sql", str(stmt))
+        payload: dict[str, Any] = {"stmt": {"sql": sql, "want_rows": True}}
+        if args:
+            if isinstance(args, dict):
+                values = [(k, v) for k, v in args.items()]
+                payload["stmt"]["named_args"] = [
+                    {"name": k, "value": self._encode(v)} for k, v in values
+                ]
+            else:
+                values = list(args)
+                payload["stmt"]["args"] = [self._encode(v) for v in values]
+        async with session.post(f"{self._url}/v1/execute", json=payload) as resp:
+            data = await resp.json(content_type=None)
+        if "error" in data or "message" in data and "result" not in data:
+            raise RuntimeError(str(data.get("message") or data.get("error")))
+        result = data["result"]
+        columns = tuple(c.get("name", "") for c in (result.get("cols") or []))
+        rows = []
+        for raw_row in result.get("rows") or []:
+            rows.append(tuple(self._convert_cell(c) for c in raw_row))
+        class _RS:
+            def __init__(self) -> None:
+                self.columns = columns
+                self.rows = rows
+                self.rows_affected = int(result.get("affected_row_count") or 0)
+                rid = result.get("last_insert_rowid")
+                self.last_insert_rowid = int(rid) if rid is not None else None
+        return _RS()
+
+    @staticmethod
+    def _encode(value: Any) -> Any:
+        if value is None:
+            return {"type": "null"}
+        if isinstance(value, bool):
+            value = int(value)
+        if isinstance(value, str):
+            return {"type": "text", "value": value}
+        if isinstance(value, int):
+            return {"type": "integer", "value": str(value)}
+        if isinstance(value, float):
+            return {"type": "float", "value": value}
+        try:
+            import base64
+            return {"type": "blob", "base64": base64.b64encode(bytes(value)).decode()}
+        except Exception:
+            return {"type": "text", "value": str(value)}
+
+    def transaction(self) -> Any:
+        # HTTP-клиент не поддерживает транзакции; TursoConnection обработает отказ.
+        raise RuntimeError("HTTP client does not support transactions")
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -498,15 +595,7 @@ class Database:
             if turso_url.startswith("libsql://"):
                 turso_url = "https://" + turso_url[len("libsql://"):]
             self._turso = True
-            try:
-                import libsql_client
-            except Exception as exc:
-                raise RuntimeError(
-                    "TURSO_DATABASE_URL задан, но libsql_client не установлен"
-                ) from exc
-            self._client = libsql_client.create_client(
-                turso_url, auth_token=turso_token or None
-            )
+            self._client = TursoHttpClient(turso_url, turso_token)
             self._conn = TursoConnection(self._client)
         else:
             self._turso = False
