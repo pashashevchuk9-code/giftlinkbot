@@ -18,7 +18,7 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
-    InputFile,
+    BufferedInputFile,
     InlineQueryResultCachedPhoto,
     InlineQueryResultPhoto,
     InputTextMessageContent,
@@ -588,15 +588,32 @@ async def on_inline_query(
         import uuid
         tmp_id = uuid.uuid4().hex[:12]
         title = f"Оффер на {amount} Stars за {nft_title}"
+        synthetic = {
+            "id": 0,
+            "status": "pending",
+            "nft_title": nft_title,
+            "nft_slug": nft_slug,
+            "nft_url": nft_url,
+            "amount": amount,
+            "buyer_username": inline_query.from_user.username,
+            "buyer_name": " ".join(
+                p for p in (inline_query.from_user.first_name, inline_query.from_user.last_name) if p
+            ),
+            "buyer_id": inline_query.from_user.id,
+            "language": language,
+            "expires_at": _now() + settings.offer_ttl_seconds,
+        }
+        instant_text = service._caption(synthetic)
         await inline_query.answer(
             [
                 InlineQueryResultArticle(
                     id=tmp_id,
                     title=title,
-                    description="Нажмите, чтобы кинуть оффер",
+                    description=instant_text.replace("\n", " ")[:200],
                     input_message_content=InputTextMessageContent(
-                        message_text=f"<b>{nft_title}</b>\n{amount} ⭐️",
+                        message_text=instant_text,
                         parse_mode="HTML",
+                        link_preview_options={"is_disabled": True},
                     ),
                 )
             ],
@@ -654,7 +671,7 @@ async def on_inline_query(
                                     if resp.status == 200:
                                         sent = await bot.send_photo(
                                             chat_id=next(iter(settings.owner_ids), inline_query.from_user.id),
-                                            photo=InputFile(BytesIO(await resp.read()), filename="nft.jpg"),
+                                            photo=BufferedInputFile(await resp.read(), filename="nft.jpg"),
                                         )
                                         if sent.photo:
                                             photo_file_id = sent.photo[-1].file_id
