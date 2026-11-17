@@ -18,8 +18,6 @@ from aiogram.types import (
     ErrorEvent,
     InlineQuery,
     InlineQueryResultArticle,
-    BufferedInputFile,
-    InlineQueryResultCachedPhoto,
     InlineQueryResultPhoto,
     InputTextMessageContent,
     Message,
@@ -611,46 +609,32 @@ async def on_inline_query(
         keyboard = offer_main_keyboard(offer_id)
         title = f"Оффер на {amount} Stars за {nft_title}"
 
-        # Фото: сначала берём file_id из кэша, иначе один раз грузим в Telegram.
-        photo_file_id = await db.state_get(f"nft_photo:{nft_slug}")
-        if not photo_file_id:
-            try:
-                info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
-                if info and info.image_url:
-                    # Фото для кэша отправляем только админам и Ивану.
-                    recipients = list(settings.admin_ids)
-                    for role in (Role.ADMIN, Role.IVAN):
-                        for u in await db.get_users_by_role(role):
-                            uid = int(u["user_id"])
-                            if uid not in recipients:
-                                recipients.append(uid)
-                    if recipients:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as s:
-                            async with s.get(info.image_url, timeout=10) as resp:
-                                if resp.status == 200:
-                                    sent = await bot.send_photo(
-                                        chat_id=recipients[0],
-                                        photo=BufferedInputFile(await resp.read(), filename="nft.jpg"),
-                                    )
-                                    if sent.photo:
-                                        photo_file_id = sent.photo[-1].file_id
-                                        await db.state_set(f"nft_photo:{nft_slug}", photo_file_id)
-                    await db.conn.execute(
-                        "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
-                        (info.title.strip()[:200] or nft_title, info.image_url, info.description, info.owner_label, offer_id),
-                    )
-                    try:
-                        await db.conn.commit()
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.warning("NFT photo cache failed for %s: %s", nft_slug, exc)
+        # Обычная карточка Telegram: фото по публичной ссылке + полный текст + кнопки.
+        nft_image_url = None
+        try:
+            info = await asyncio.wait_for(nft.resolve(nft_url), timeout=6.0)
+            if info:
+                if info.title.strip():
+                    nft_title = info.title.strip()[:200]
+                nft_image_url = info.image_url
+                await db.conn.execute(
+                    "UPDATE offers SET nft_title=?, nft_image_url=?, nft_description=?, nft_owner_label=? WHERE id=?",
+                    (nft_title, info.image_url, info.description, info.owner_label, offer_id),
+                )
+                try:
+                    await db.conn.commit()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("NFT resolve failed for %s: %s", nft_slug, exc)
 
-        if photo_file_id:
-            result = InlineQueryResultCachedPhoto(
+        card_text = service._caption(await db.get_offer(offer_id) or offer)
+
+        if nft_image_url:
+            result = InlineQueryResultPhoto(
                 id=str(offer_id),
-                photo_file_id=photo_file_id,
+                photo_url=nft_image_url,
+                thumbnail_url=nft_image_url,
                 title=title,
                 description=card_text.replace("\n", " ")[:200],
                 caption=card_text,
@@ -670,7 +654,7 @@ async def on_inline_query(
                 reply_markup=keyboard,
             )
         await inline_query.answer([result], cache_time=0, is_personal=True)
-        logger.info("Inline result ready: offer_id=%s, has_photo=%s", offer_id, bool(photo_file_id))
+        logger.info("Inline result ready: offer_id=%s, has_photo=%s", offer_id, bool(nft_image_url))
 
     except Exception as exc:
         logger.exception("Inline query error: %s", exc)
