@@ -516,8 +516,8 @@ class RoleDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner["role"], Role.OWNER.value)
 
         # OWNER определяется только ID из конфигурации.
-        downgraded = await self.db.ensure_user(11, "owner", "Owner", None)
-        self.assertEqual(downgraded["role"], Role.USER.value)
+        still_owner = await self.db.ensure_user(11, "owner", "Owner", None)
+        self.assertEqual(still_owner["role"], Role.OWNER.value)
 
     async def test_roles_bans_warnings_restrictions(self) -> None:
         await self.db.ensure_user(20, "target", "Target", None)
